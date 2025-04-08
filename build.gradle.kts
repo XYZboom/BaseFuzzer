@@ -8,18 +8,22 @@ plugins {
     alias(libs.plugins.kotlinx.serialization)
     alias(libs.plugins.antlr.kotlin)
     alias(libs.plugins.kotest.multiplatform)
+    `maven-publish`
 }
 
 group = "com.github.xyzboom"
-version = "1.0-SNAPSHOT"
+version = "1.0.0-SNAPSHOT"
 
 repositories {
     mavenCentral()
 }
 
-dependencies {
-    commonMainImplementation(libs.kaml)
-    commonTestImplementation(kotlin("test"))
+publishing {
+    repositories {
+        maven {
+            url = uri("https://jitpack.io")
+        }
+    }
 }
 
 fun KotlinNativeTarget.configureNativeTarget() {
@@ -50,6 +54,7 @@ kotlin {
     sourceSets {
         commonMain {
             dependencies {
+                implementation(libs.kaml)
                 implementation(libs.okio)
                 implementation(libs.antlr.kotlin)
             }
@@ -59,6 +64,7 @@ kotlin {
         }
         val commonTest by getting {
             dependencies {
+                implementation(kotlin("test"))
                 implementation(libs.kotest.assertions.core)
                 implementation(libs.kotest.framework.engine)
             }
