@@ -1,4 +1,5 @@
 import com.strumenta.antlrkotlin.gradle.AntlrKotlinTask
+import org.gradle.jvm.tasks.Jar
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
@@ -8,18 +9,22 @@ plugins {
     alias(libs.plugins.kotlinx.serialization)
     alias(libs.plugins.antlr.kotlin)
     alias(libs.plugins.kotest.multiplatform)
+    `maven-publish`
 }
 
 group = "com.github.xyzboom"
-version = "1.0-SNAPSHOT"
+version = "1.0.0-SNAPSHOT"
 
 repositories {
     mavenCentral()
 }
 
-dependencies {
-    commonMainImplementation(libs.kaml)
-    commonTestImplementation(kotlin("test"))
+publishing {
+    repositories {
+        maven {
+            url = uri("https://jitpack.io")
+        }
+    }
 }
 
 fun KotlinNativeTarget.configureNativeTarget() {
@@ -33,23 +38,26 @@ fun KotlinNativeTarget.configureNativeTarget() {
 kotlin {
     jvm {
         compilerOptions {
-            jvmTarget = JvmTarget.JVM_1_8
+            jvmTarget = JvmTarget.JVM_11
         }
     }
     js {
         browser { }
         nodejs { }
     }
-    linuxX64 {
-        configureNativeTarget()
-    }
-    mingwX64 {
-        configureNativeTarget()
+    if (System.getenv("JITPACK") == null) {
+        linuxX64 {
+            configureNativeTarget()
+        }
+        mingwX64 {
+            configureNativeTarget()
+        }
     }
 
     sourceSets {
         commonMain {
             dependencies {
+                implementation(libs.kaml)
                 implementation(libs.okio)
                 implementation(libs.antlr.kotlin)
             }
@@ -59,6 +67,7 @@ kotlin {
         }
         val commonTest by getting {
             dependencies {
+                implementation(kotlin("test"))
                 implementation(libs.kotest.assertions.core)
                 implementation(libs.kotest.framework.engine)
             }
@@ -95,6 +104,10 @@ val generateKotlinGrammarSource = tasks.register<AntlrKotlinTask>("generateKotli
 }
 
 tasks.withType<KotlinCompilationTask<*>> {
+    dependsOn(generateKotlinGrammarSource)
+}
+
+tasks.withType<Jar> {
     dependsOn(generateKotlinGrammarSource)
 }
 
