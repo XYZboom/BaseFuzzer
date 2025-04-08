@@ -26,4 +26,14 @@ class ParserKtTest: FunSpec({
         leaf.references.single().name shouldBe "b"
         leaf.references.single().type shouldBe RefType.NON_NULL
     }
+    test("parseYamlElement1") {
+        val content = """
+            a:
+                b: c # inlined b
+            ~leaf:
+                c
+        """.trimIndent()
+        val elementMap = parseYamlElement(content)
+        elementMap.size shouldBe 3
+    }
 })
