@@ -44,11 +44,13 @@ kotlin {
         browser { }
         nodejs { }
     }
-    linuxX64 {
-        configureNativeTarget()
-    }
-    mingwX64 {
-        configureNativeTarget()
+    if (System.getenv("JITPACK") == null) {
+        linuxX64 {
+            configureNativeTarget()
+        }
+        mingwX64 {
+            configureNativeTarget()
+        }
     }
 
     sourceSets {
