@@ -1,0 +1,7 @@
+jdk:
+  - openjdk11
+before_install:
+  - apt-get update -qq
+  - apt-get install -y g++-9
+  - update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 60
+  - update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 60
