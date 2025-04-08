@@ -3,3 +3,10 @@ plugins {
 }
 rootProject.name = "base-fuzzer"
 
+dependencyResolutionManagement {
+    versionCatalogs {
+        create("libs") {
+        }
+    }
+}
+
