@@ -8,7 +8,6 @@ plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.kotlinx.serialization)
     alias(libs.plugins.antlr.kotlin)
-    alias(libs.plugins.kotest.multiplatform)
     `maven-publish`
 }
 
@@ -69,12 +68,6 @@ kotlin {
             dependencies {
                 implementation(kotlin("test"))
                 implementation(libs.kotest.assertions.core)
-                implementation(libs.kotest.framework.engine)
-            }
-        }
-        val jvmTest by getting {
-            dependencies {
-                implementation(libs.kotest.runner.junit5)
             }
         }
     }

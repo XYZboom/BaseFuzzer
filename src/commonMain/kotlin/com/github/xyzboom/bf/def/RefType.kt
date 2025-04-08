@@ -13,12 +13,15 @@ enum class RefType(val typeString: String) {
 
         @JvmStatic
         fun fromTypeString(typeString: String): RefType {
+            if (typeString.isEmpty()) {
+                return DEFAULT
+            }
             for (refType in entries) {
                 if (refType.typeString == typeString) {
                     return refType
                 }
             }
-            throw IllegalStateException()
+            throw IllegalStateException("Cannot find a RefType with \"$typeString\"")
         }
     }
 }
