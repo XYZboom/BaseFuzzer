@@ -1,4 +1,5 @@
 import com.strumenta.antlrkotlin.gradle.AntlrKotlinTask
+import org.gradle.jvm.tasks.Jar
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
@@ -103,6 +104,10 @@ val generateKotlinGrammarSource = tasks.register<AntlrKotlinTask>("generateKotli
 }
 
 tasks.withType<KotlinCompilationTask<*>> {
+    dependsOn(generateKotlinGrammarSource)
+}
+
+tasks.withType<Jar> {
     dependsOn(generateKotlinGrammarSource)
 }
 
