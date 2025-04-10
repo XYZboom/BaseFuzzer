@@ -1,6 +1,7 @@
 package com.github.xyzboom.bf.def
 
 import com.charleskorn.kaml.Yaml
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import kotlin.test.Test
 
@@ -19,5 +20,26 @@ leaves:
   "b":
     name: "b"
     contents: []"""
+    }
+
+    @Test
+    fun parseDefinitionShouldFailOnMultiLeafRef() {
+        shouldThrow<IllegalArgumentException> {
+            parseDefinition("a: b*;~leaf: a b;")
+        }
+    }
+
+    @Test
+    fun parseDefinitionShouldFailOnNotNonnullLeafRef() {
+        val cases = listOf(
+            "a: b*;~leaf: b?;",
+            "a: b*;~leaf: b*;",
+            "a: b*;~leaf: b+;"
+        )
+        for (case in cases) {
+            shouldThrow<IllegalArgumentException> {
+                parseDefinition(case)
+            }
+        }
     }
 }
