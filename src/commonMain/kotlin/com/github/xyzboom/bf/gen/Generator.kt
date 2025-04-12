@@ -4,12 +4,18 @@ import com.github.xyzboom.bf.def.Definition
 import com.github.xyzboom.bf.def.RefType.*
 import com.github.xyzboom.bf.gen.strategy.IGenerateStrategy
 import com.github.xyzboom.bf.tree.Node
+import kotlin.jvm.JvmOverloads
 
 open class Generator(
     val def: Definition,
     val strategy: IGenerateStrategy
 ) {
     val generatedNode = mutableMapOf<String, MutableList<Node>>()
+
+    @JvmOverloads
+    open fun generateNode(name: String, context: Node?, ref: Node? = null): Node {
+        return Node(name, mutableListOf(), context, ref)
+    }
 
     fun generate(name: String): Node {
         generatedNode.clear()
@@ -24,7 +30,7 @@ open class Generator(
         } else {
             statement ?: throw IllegalArgumentException("No such statement: $name in definition")
         }
-        val node = Node(usingStatement.name, mutableListOf(), parent)
+        val node = generateNode(usingStatement.name, parent)
         val contents = usingStatement.contents
         val content = when (contents.size) {
             0 -> return node // leaf handled here
@@ -39,7 +45,7 @@ open class Generator(
             fun generateChild() {
                 val refNode = strategy.chooseReference(usingStatement, node, generatedNode)
                 val child = if (refNode != null) {
-                    Node(ref.name, ref = refNode)
+                    generateNode(ref.name, null, refNode)
                 } else {
                     generate(ref.name, node)
                 }
