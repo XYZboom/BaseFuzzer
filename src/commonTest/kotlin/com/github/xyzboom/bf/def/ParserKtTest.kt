@@ -8,7 +8,8 @@ import kotlin.test.Test
 class ParserKtTest {
     @Test
     fun parseDefinition0() {
-        val definition = parseDefinition("a: b*;~leaf: b;")
+        val parser = Parser()
+        val definition = parser.parseDefinition("a: b*;b;")
         val definitionString = Yaml.default.encodeToString(Definition.serializer(), definition)
         definitionString shouldBe """statementsMap:
   "a":
@@ -16,30 +17,17 @@ class ParserKtTest {
     contents:
     - - name: "b"
         type: "ZERO_OR_MORE"
-leaves:
   "b":
     name: "b"
     contents: []"""
     }
 
     @Test
-    fun parseDefinitionShouldFailOnMultiLeafRef() {
-        shouldThrow<IllegalArgumentException> {
-            parseDefinition("a: b*;~leaf: a b;")
+    fun parseDefinitionShouldFailOnUndefinedRef() {
+        val e = shouldThrow<IllegalArgumentException> {
+            val parser = Parser()
+            parser.parseDefinition("a: b*;")
         }
-    }
-
-    @Test
-    fun parseDefinitionShouldFailOnNotNonnullLeafRef() {
-        val cases = listOf(
-            "a: b*;~leaf: b?;",
-            "a: b*;~leaf: b*;",
-            "a: b*;~leaf: b+;"
-        )
-        for (case in cases) {
-            shouldThrow<IllegalArgumentException> {
-                parseDefinition(case)
-            }
-        }
+        e.message shouldBe "Undefined Reference at 1:3"
     }
 }

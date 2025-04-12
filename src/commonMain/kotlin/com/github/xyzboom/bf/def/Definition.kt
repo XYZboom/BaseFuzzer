@@ -6,10 +6,5 @@ import kotlinx.serialization.Serializable
 class Definition(
     val statementsMap: MutableMap<String, Statement>
 ) {
-    val statement get() = statementsMap.values
-    val leaves: MutableMap<String, Statement> = mutableMapOf()
-
-    object BuiltIn {
-        const val LEAF_NAME = "~leaf"
-    }
+    val statements get() = statementsMap.values
 }

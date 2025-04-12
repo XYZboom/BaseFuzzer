@@ -7,4 +7,4 @@ import kotlin.jvm.JvmInline
 @Serializable
 value class ReferenceList(
     val references: List<Reference>
-)
+): Iterable<Reference> by references

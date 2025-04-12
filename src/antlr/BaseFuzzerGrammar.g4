@@ -4,19 +4,17 @@ options { tokenVocab=BaseFuzzerLexer; }
 
 definition: (statement)*;
 
-statement: id ':' statementContentList ';';
+statement: id (':' statementContentList)? ';';
 
 statementContentList: statementContent ('|' statementContent)*;
 
 statementContent: ref+;
 
 // ID
-id: normalId | builtinId;
-normalId: ID;
-builtinId: '~' ID;
+id: ID;
 
 // Reference
-ref: normalId refType;
+ref: id refType;
 refType
     : '!'?      # non_null_ref
     | '?'       # nullable_ref

@@ -2,7 +2,8 @@ package com.github.xyzboom.bf.gen.strategy
 
 import com.github.xyzboom.bf.def.Reference
 import com.github.xyzboom.bf.def.Statement
-import com.github.xyzboom.bf.tree.Node
+import com.github.xyzboom.bf.tree.INode
+import kotlin.jvm.JvmWildcard
 
 interface IGenerateStrategy {
     /**
@@ -10,11 +11,11 @@ interface IGenerateStrategy {
      *
      * @return true if you want to generate a leaf node now.
      */
-    fun chooseLeaf(statement: Statement, context: Node?): Boolean
+    fun chooseLeaf(statement: Statement, context: INode?): Boolean
     /**
      * @return null if you want to generate a new node
      */
-    fun chooseReference(statement: Statement, context: Node, generatedNode: Map<String, List<Node>>): Node?
-    fun chooseIndex(statement: Statement, context: Node?): Int
-    fun chooseSize(reference: Reference, context: Node): Int
+    fun chooseReference(statement: Statement, context: INode, generatedNode: Map<String, List<@JvmWildcard INode>>): INode?
+    fun chooseIndex(statement: Statement, context: INode?): Int
+    fun chooseSize(reference: Reference, context: INode): Int
 }
