@@ -15,7 +15,7 @@ interface IGenerateStrategy {
     /**
      * @return null if you want to generate a new node
      */
-    fun chooseReference(statement: Statement, context: INode, generatedNode: Map<String, List<@JvmWildcard INode>>): INode?
+    fun chooseReference(reference: Reference, context: INode, generatedNode: Map<String, List<@JvmWildcard INode>>): INode?
     fun chooseIndex(statement: Statement, context: INode?): Int
     fun chooseSize(reference: Reference, context: INode): Int
 }

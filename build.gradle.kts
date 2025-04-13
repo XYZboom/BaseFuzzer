@@ -24,6 +24,25 @@ publishing {
             url = uri("https://jitpack.io")
         }
     }
+    publications {
+        create<MavenPublication>("source") {
+            groupId = "com.github.XYZboom"
+            artifactId = "CodeSmith"
+            version = "1.0-SNAPSHOT"
+
+            // 配置要上传的源码
+            sourceSets.filter {
+                "test" !in it.name
+            }.forEach { sourceSet ->
+                artifact(tasks.register<Jar>("${sourceSet.name}SourcesJar") {
+                    from(sourceSet.allSource)
+                    archiveClassifier.set("sources")
+                }) {
+                    classifier = "sources"
+                }
+            }
+        }
+    }
 }
 
 fun KotlinNativeTarget.configureNativeTarget() {
@@ -56,6 +75,7 @@ kotlin {
     sourceSets {
         commonMain {
             dependencies {
+                implementation(libs.kotlin.logging)
                 implementation(libs.kaml)
                 implementation(libs.okio)
                 implementation(libs.antlr.kotlin)
@@ -68,6 +88,11 @@ kotlin {
             dependencies {
                 implementation(kotlin("test"))
                 implementation(libs.kotest.assertions.core)
+            }
+        }
+        jvmMain {
+            dependencies {
+                implementation(libs.ksp)
             }
         }
     }

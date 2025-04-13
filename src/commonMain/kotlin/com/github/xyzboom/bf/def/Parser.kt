@@ -47,7 +47,7 @@ class Parser {
             require(ref.name in def.statementsMap) {
                 val startLine = refCtx.start?.line ?: -1
                 val startCol = refCtx.start?.charPositionInLine ?: -1
-                "Undefined Reference at $startLine:$startCol"
+                "Undefined Reference ${ref.name} at $startLine:$startCol"
             }
         }
     }
