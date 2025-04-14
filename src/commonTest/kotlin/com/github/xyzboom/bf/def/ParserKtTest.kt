@@ -28,6 +28,6 @@ class ParserKtTest {
             val parser = Parser()
             parser.parseDefinition("a: b*;")
         }
-        e.message shouldBe "Undefined Reference at 1:3"
+        e.message shouldBe "Undefined Reference b at 1:3"
     }
 }

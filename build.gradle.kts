@@ -8,6 +8,7 @@ plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.kotlinx.serialization)
     alias(libs.plugins.antlr.kotlin)
+    alias(libs.plugins.ksp)
     `maven-publish`
 }
 
@@ -54,6 +55,7 @@ fun KotlinNativeTarget.configureNativeTarget() {
 }
 
 kotlin {
+    jvmToolchain(11)
     jvm {
         compilerOptions {
             jvmTarget = JvmTarget.JVM_11
@@ -84,7 +86,7 @@ kotlin {
                 srcDir(layout.buildDirectory.dir("generatedAntlr"))
             }
         }
-        val commonTest by getting {
+        commonTest {
             dependencies {
                 implementation(kotlin("test"))
                 implementation(libs.kotest.assertions.core)
@@ -95,7 +97,19 @@ kotlin {
                 implementation(libs.ksp)
             }
         }
+        jvmTest {
+            dependencies {
+                runtimeOnly("org.apache.logging.log4j:log4j-api:2.20.0")
+                runtimeOnly("org.slf4j:slf4j-log4j12:2.0.16")
+                runtimeOnly("org.slf4j:slf4j-api:2.0.16")
+            }
+        }
     }
+}
+
+dependencies {
+    add("kspJvmTest", rootProject)
+    add("kspJsTest", rootProject)
 }
 
 val generateKotlinGrammarSource = tasks.register<AntlrKotlinTask>("generateKotlinGrammarSource") {

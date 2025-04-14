@@ -14,7 +14,7 @@ class GeneratorTest {
     fun generateWillOnlyCallChooseRef() {
         val strategy = object : ILeafIllegalStrategy, IndexIllegalStrategy {
             override fun chooseReference(
-                statement: Statement,
+                reference: Reference,
                 context: INode,
                 generatedNode: Map<String, List<INode>>
             ): INode? {

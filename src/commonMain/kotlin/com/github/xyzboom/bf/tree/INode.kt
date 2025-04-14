@@ -1,3 +1,5 @@
 package com.github.xyzboom.bf.tree
 
-interface INode
+interface INode {
+    val context: INode? get() = null
+}

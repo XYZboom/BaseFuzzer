@@ -12,7 +12,7 @@ interface ILeafIllegalStrategy : IGenerateStrategy {
 }
 
 interface IRefIllegalStrategy: IGenerateStrategy {
-    override fun chooseReference(statement: Statement, context: INode, generatedNode: Map<String, List<INode>>): INode? {
+    override fun chooseReference(reference: Reference, context: INode, generatedNode: Map<String, List<INode>>): INode? {
         throw IllegalStateException("chooseReference should never be called!")
     }
 }
