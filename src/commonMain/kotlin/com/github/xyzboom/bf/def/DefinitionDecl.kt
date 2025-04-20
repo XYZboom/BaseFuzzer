@@ -1,9 +1,14 @@
 package com.github.xyzboom.bf.def
 
+import org.intellij.lang.annotations.Language
+
 @Target(AnnotationTarget.PROPERTY)
-annotation class DefinitionDecl(val defValue: String) {
+annotation class DefinitionDecl(
+    val defValue: String,
+    @Language("YAML")
+    val extraValue: String = ""
+) {
     companion object {
-        const val FULL_NAME = "com.github.xyzboom.bf.def.DefinitionDecl"
         const val NAME = "DefinitionDecl"
     }
 }

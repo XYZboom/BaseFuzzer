@@ -17,6 +17,7 @@ version = "1.0.0-SNAPSHOT"
 
 repositories {
     mavenCentral()
+    maven("https://central.sonatype.com/repository/maven-snapshots/")
 }
 
 publishing {
@@ -65,13 +66,11 @@ kotlin {
         browser { }
         nodejs { }
     }
-    if (System.getenv("JITPACK") == null) {
-        linuxX64 {
-            configureNativeTarget()
-        }
-        mingwX64 {
-            configureNativeTarget()
-        }
+    linuxX64 {
+        configureNativeTarget()
+    }
+    mingwX64 {
+        configureNativeTarget()
     }
 
     sourceSets {
@@ -81,9 +80,13 @@ kotlin {
                 implementation(libs.kaml)
                 implementation(libs.okio)
                 implementation(libs.antlr.kotlin)
+//                implementation(libs.konst)
+                implementation(libs.jetbrains.anno)
             }
             kotlin {
-                srcDir(layout.buildDirectory.dir("generatedAntlr"))
+                srcDirs(
+                    layout.buildDirectory.dir("generatedAntlr"),
+                )
             }
         }
         commonTest {

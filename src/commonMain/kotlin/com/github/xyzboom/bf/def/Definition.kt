@@ -14,7 +14,7 @@ class Definition(
      * key: statement name.
      * value: available context names.
      */
-    val contextMap: Map<String, Set<String>> by lazy { collectContext() }
+    val parentMap: Map<String, Set<String>> by lazy { collectContext() }
 
     private fun collectContext(): Map<String, Set<String>> {
         val result = mutableMapOf<String, MutableSet<String>>()
