@@ -79,6 +79,21 @@ class DefinitionProcessor(
     private fun String.nameForChildProperty(multi: Boolean): String {
         return "${lowercaseFirstChar()}Child${if (multi) "ren" else ""}"
     }
+
+    private val String.nameForChooseIndexFunction
+        get(): String {
+            return "choose${uppercaseFirstChar()}Index"
+        }
+
+    private val String.nameForChooseReferenceFunction
+        get(): String {
+            return "choose${uppercaseFirstChar()}Reference"
+        }
+
+    private val String.nameForGeneratedNodesProperty
+        get(): String {
+            return "generated${uppercaseFirstChar()}Nodes"
+        }
     //</editor-fold>
 
     @OptIn(KspExperimental::class)
@@ -139,11 +154,52 @@ class DefinitionProcessor(
             writeClassHead(packageName)
             +!"open class $generatorName : ${AbstractGenerator::class.simpleName!!}() {"
             indentCount++
+            editorFoldOf("generated nodes") {
+                for ((name, _) in def.statementsMap) {
+                    +!"val ${name.nameForGeneratedNodesProperty}: MutableList<${name.nameForNode}> = mutableListOf()"
+                }
+                +!"open fun clearGeneratedNodes() {"
+                indentCount++
+                for ((name, _) in def.statementsMap) {
+                    +!"${name.nameForGeneratedNodesProperty}.clear()"
+                }
+                indentCount--
+                +!"}"
+            }
+            editorFoldOf("choose reference") {
+                for ((name, _) in def.statementsMap) {
+                    +"open fun ${name.nameForChooseReferenceFunction}("
+                    if (def.parentMap[name] != null) {
+                        +"parent: ${name.nameForNode}"
+                    }
+                    +!"): IRef? {"
+                    indentCount++
+                    +!"if (random.nextBoolean()) return null"
+                    +!"return ${RefNode::class.simpleName}(${name.nameForGeneratedNodesProperty}.random(random))"
+                    indentCount--
+                    +!"}"
+                }
+            }
+            editorFoldOf("choose index functions") {
+                for ((name, stat) in def.statementsMap) {
+                    if (stat.contents.size > 1) {
+                        +"open fun ${name.nameForChooseIndexFunction}("
+                        if (def.parentMap[name] != null) {
+                            +"context: ${name.nameForParent}"
+                        }
+                        +!"): Int {"
+                        indentCount++
+                        +!"return ${AbstractGenerator::random.name}.nextInt(${stat.contents.size})"
+                        indentCount--
+                        +!"}"
+                    }
+                }
+            }
             editorFoldOf("new node functions") {
                 for ((name, _) in def.statementsMap) {
                     +!"open fun ${name.nameForNewNodeFunction}(): ${name.nameForNode} {"
                     +!"    return ${name.nameForDefaultNode}()"
-                    +!"}\n"
+                    +!"}"
                 }
             }
             editorFoldOf("generate functions") {
@@ -151,16 +207,41 @@ class DefinitionProcessor(
                     +"open fun ${name.nameForGenFunction}("
                     val hasParent = def.parentMap[name] != null
                     if (hasParent) {
-                        +"${ITreeChild::parent.name}: ${INode::class.simpleName!!}"
+                        +"parent: ${name.nameForParent}"
                     }
-                    +!"): ${name.nameForNode} {"
+                    +!"): ${INode::class.simpleName} {"
                     indentCount++
                     +!"val result = ${name.nameForNewNodeFunction}()"
                     if (hasParent) {
-                        +!"result.${ITreeChild::parent.name} = ${ITreeChild::parent.name}"
+                        +!"result.${ITreeChild::parent.name} = parent"
                     }
-                    if (stat.contents.isNotEmpty()) {
+                    if (stat.contents.size > 1) {
+                        +"when (val index = ${name.nameForChooseIndexFunction}("
+                        if (hasParent) {
+                            +"parent"
+                        }
+                        +!")) {"
+                        indentCount++
 
+                        fun writeGenChildrenCode(refList: ReferenceList) {
+                            +!"result.children.apply {"
+                            indentCount++
+                            for (ref in refList) {
+                                +!"add(${ref.name.nameForGenFunction}(result))"
+                            }
+                            indentCount--
+                            +!"}"
+                        }
+
+                        for ((i, refList) in stat.contents.withIndex()) {
+                            +"$i -> "
+                            writeGenChildrenCode(refList)
+                        }
+                        +"else -> throw ${IllegalArgumentException::class.qualifiedName!!}(\""
+                        +"Index: ${'$'}index returned from ${name.nameForChooseIndexFunction} is illegal."
+                        +!"\")"
+                        indentCount--
+                        +!"}"
                     }
                     +!"return result"
                     indentCount--
@@ -213,7 +294,7 @@ class DefinitionProcessor(
             }
         }
 
-        +"sealed interface ${name.nameForNode} : ${INode::class.simpleName}"
+        +"interface ${name.nameForNode} : ${INode::class.simpleName}"
         if (reference.isNotEmpty()) {
             // extends Parent interfaces
             +", ${ITreeParent::class.simpleName}, "
@@ -291,8 +372,10 @@ class DefinitionProcessor(
         +!"package $packageName"
         +!""
         +!"import ${INode::class.qualifiedName}"
+        +!"import ${IRef::class.qualifiedName}"
         +!"import ${ITreeParent::class.qualifiedName}"
         +!"import ${ITreeChild::class.qualifiedName}"
+        +!"import ${RefNode::class.qualifiedName}"
         +!"import ${AbstractGenerator::class.qualifiedName}"
         +!""
     }
