@@ -7,5 +7,6 @@ import kotlin.jvm.JvmOverloads
 open class NamedTreeNode @JvmOverloads constructor(
     override val name: String,
     override val children: MutableList<INode> = mutableListOf(),
-    override val parent: INode? = null,
-): INode, IName, ITreeNode
+): INode, IName, ITreeNode {
+    override lateinit var parent: INode
+}

@@ -1,6 +1,8 @@
 package com.github.xyzboom.bf.ksp
 
 import com.github.xyzboom.bf.def.*
+import com.github.xyzboom.bf.def.RefType.*
+import com.github.xyzboom.bf.gen.AbstractGenerator
 import com.github.xyzboom.bf.tree.*
 import com.google.devtools.ksp.KspExperimental
 import com.google.devtools.ksp.getAnnotationsByType
@@ -19,10 +21,15 @@ class DefinitionProcessor(
     /**
      * cache for uppercase first char of all names.
      */
-    private val nameCache = mutableMapOf<String, String>()
+    private val uppercaseNameCache = mutableMapOf<String, String>()
+    private val lowercaseNameCache = mutableMapOf<String, String>()
 
     private fun String.uppercaseFirstChar(): String {
-        return nameCache.getOrPut(this) { replaceFirstChar { it.uppercaseChar() } }
+        return uppercaseNameCache.getOrPut(this) { replaceFirstChar { it.uppercaseChar() } }
+    }
+
+    private fun String.lowercaseFirstChar(): String {
+        return lowercaseNameCache.getOrPut(this) { replaceFirstChar { it.lowercaseChar() } }
     }
 
     override fun process(resolver: Resolver): List<KSAnnotated> {
@@ -38,6 +45,7 @@ class DefinitionProcessor(
         return emptyList()
     }
 
+    //<editor-fold desc="Names">
     private val String.nameForParent
         get(): String {
             return "I${uppercaseFirstChar()}Parent"
@@ -53,25 +61,57 @@ class DefinitionProcessor(
             return "I${uppercaseFirstChar()}Child"
         }
 
+    private val String.nameForDefaultNode
+        get(): String {
+            return "Default${uppercaseFirstChar()}Node"
+        }
+
+    private val String.nameForNewNodeFunction
+        get() : String {
+            return "new${uppercaseFirstChar()}"
+        }
+
+    private val String.nameForGenFunction
+        get(): String {
+            return "generate${uppercaseFirstChar()}"
+        }
+
+    private fun String.nameForChildProperty(multi: Boolean): String {
+        return "${lowercaseFirstChar()}Child${if (multi) "ren" else ""}"
+    }
+    //</editor-fold>
+
     @OptIn(KspExperimental::class)
     private fun handleDef(defDecl: KSAnnotated) {
         if (defDecl !is KSPropertyDeclaration) {
-            logger.error("${DefinitionDecl::class.simpleName} should only be used on a const top-level property!", defDecl)
+            logger.error(
+                "${DefinitionDecl::class.simpleName} should only be used on a const top-level property!",
+                defDecl
+            )
             return
         }
         val containingFile = defDecl.containingFile ?: return
         val parent = defDecl.parent
         if (parent != null && parent !is KSFile) {
-            logger.error("The property has ${DefinitionDecl::class.simpleName} should be const top-level String!", defDecl)
+            logger.error(
+                "The property has ${DefinitionDecl::class.simpleName} should be const top-level String!",
+                defDecl
+            )
             return
         }
         if (Modifier.CONST !in defDecl.modifiers) {
-            logger.error("The property has ${DefinitionDecl::class.simpleName} should be const top-level String!", defDecl)
+            logger.error(
+                "The property has ${DefinitionDecl::class.simpleName} should be const top-level String!",
+                defDecl
+            )
             return
         }
         val type = defDecl.type.resolve().declaration.qualifiedName
         if (type?.asString() != "kotlin.String") {
-            logger.error("The property has ${DefinitionDecl::class.simpleName} should be const top-level String!", defDecl)
+            logger.error(
+                "The property has ${DefinitionDecl::class.simpleName} should be const top-level String!",
+                defDecl
+            )
             return
         }
         val anno = defDecl.getAnnotationsByType(DefinitionDecl::class).single()
@@ -84,6 +124,51 @@ class DefinitionProcessor(
             for ((name, stat) in def.statementsMap) {
                 newClassForStatement(name, stat.contents, def.parentMap[name] ?: emptySet())
             }
+        }
+        val generatorName = "${declValName.uppercaseFirstChar()}Generator"
+        createGeneratorClass(containingFile, packageName, generatorName, def)
+    }
+
+    private fun createGeneratorClass(
+        containingFile: KSFile,
+        packageName: String,
+        generatorName: String,
+        def: Definition
+    ) {
+        newFile(containingFile, packageName, generatorName) {
+            writeClassHead(packageName)
+            +!"open class $generatorName : ${AbstractGenerator::class.simpleName!!}() {"
+            indentCount++
+            editorFoldOf("new node functions") {
+                for ((name, _) in def.statementsMap) {
+                    +!"open fun ${name.nameForNewNodeFunction}(): ${name.nameForNode} {"
+                    +!"    return ${name.nameForDefaultNode}()"
+                    +!"}\n"
+                }
+            }
+            editorFoldOf("generate functions") {
+                for ((name, stat) in def.statementsMap) {
+                    +"open fun ${name.nameForGenFunction}("
+                    val hasParent = def.parentMap[name] != null
+                    if (hasParent) {
+                        +"${ITreeChild::parent.name}: ${INode::class.simpleName!!}"
+                    }
+                    +!"): ${name.nameForNode} {"
+                    indentCount++
+                    +!"val result = ${name.nameForNewNodeFunction}()"
+                    if (hasParent) {
+                        +!"result.${ITreeChild::parent.name} = ${ITreeChild::parent.name}"
+                    }
+                    if (stat.contents.isNotEmpty()) {
+
+                    }
+                    +!"return result"
+                    indentCount--
+                    +!"}"
+                }
+            }
+            indentCount--
+            +!"}"
         }
     }
 
@@ -108,7 +193,27 @@ class DefinitionProcessor(
         reference: List<ReferenceList>,
         parents: Set<String>
     ) {
-        +"interface ${name.nameForNode} : ${INode::class.simpleName}"
+
+        fun genContentProperties(refList: ReferenceList, impl: Boolean = false) {
+            for (ref in refList) {
+                if (impl) {
+                    +"override "
+                    if (ref.type != NULLABLE) {
+                        +"lateinit "
+                    }
+                }
+                +"var ${ref.name.nameForChildProperty(ref.type.canBeMulti())}: "
+                val nodeName = ref.name.nameForNode
+                +when (ref.type) {
+                    NON_NULL -> nodeName
+                    NULLABLE -> "${nodeName}?${if (impl) " = null" else ""}"
+                    ONE_OR_MORE, ZERO_OR_MORE -> "MutableList<${nodeName}>"
+                }
+                +!""
+            }
+        }
+
+        +"sealed interface ${name.nameForNode} : ${INode::class.simpleName}"
         if (reference.isNotEmpty()) {
             // extends Parent interfaces
             +", ${ITreeParent::class.simpleName}, "
@@ -122,6 +227,11 @@ class DefinitionProcessor(
             +(", " join parents.map { it.nameForChild })
         }
         +!" {"
+        if (reference.size == 1) {
+            indentCount++
+            genContentProperties(reference.single())
+            indentCount--
+        }
         +!"}\n"
 
         if (reference.isNotEmpty()) {
@@ -132,16 +242,58 @@ class DefinitionProcessor(
         if (parents.isNotEmpty()) {
             +!"sealed interface ${name.nameForParent} : ${INode::class.simpleName}"
         }
+
+        if (reference.isEmpty()) {
+            +!"open class ${name.nameForDefaultNode} : ${name.nameForNode} {"
+            if (parents.isNotEmpty()) {
+                +!"    override lateinit var ${ITreeChild::parent.name}: ${INode::class.simpleName}"
+            }
+            if (reference.isNotEmpty()) {
+                +!"    override val ${ITreeParent::children.name}: MutableList<INode> = mutableListOf()"
+            }
+            +!"}"
+        } else if (reference.size > 1) {
+            +!"open class ${name.nameForDefaultNode} : ${name.nameForDefaultNode}0()"
+        }
+        for ((i, refList) in reference.withIndex()) {
+            +"open class ${name.nameForDefaultNode}"
+            if (reference.size > 1) {
+                +"$i"
+            }
+            +" : ${name.nameForNode}"
+            if (reference.size > 1) {
+                +"$i"
+            }
+            +!" {"
+            indentCount++
+            if (parents.isNotEmpty()) {
+                +!"override lateinit var ${ITreeChild::parent.name}: ${INode::class.simpleName}"
+            }
+            if (reference.isNotEmpty()) {
+                +!"override val ${ITreeParent::children.name}: MutableList<INode> = mutableListOf()"
+            }
+            genContentProperties(refList, true)
+            indentCount--
+            +!"}"
+            if (reference.size > 1) {
+                +!"interface ${name.nameForNode}${i} : ${name.nameForNode} {"
+                indentCount++
+                genContentProperties(refList)
+                indentCount--
+                +!"}"
+            }
+        }
     }
 
     private fun PrintWriterWrapper.writeClassHead(packageName: String) {
-        +!"@file:Suppress(\"unused\", \"ClassName\")"
+        +!"@file:Suppress(\"unused\", \"ClassName\", \"RemoveEmptyClassBody\", \"PropertyName\")"
         +!""
         +!"package $packageName"
         +!""
         +!"import ${INode::class.qualifiedName}"
         +!"import ${ITreeParent::class.qualifiedName}"
         +!"import ${ITreeChild::class.qualifiedName}"
+        +!"import ${AbstractGenerator::class.qualifiedName}"
         +!""
     }
 
@@ -149,25 +301,45 @@ class DefinitionProcessor(
         const val NAME_GENERATED = "generated"
     }
 
-    @JvmInline
-    @Suppress("NOTHING_TO_INLINE")
-    private value class PrintWriterWrapper(val printer: PrintWriter) : Closeable by printer {
+    private class PrintWriterWrapper(private val printer: PrintWriter) : Closeable by printer {
+        var indentCount = 0
+
+        /**
+         * true if the printer just ready to start a new line.
+         */
+        var newLine = true
+
         @JvmInline
         value class StringAndNewLine(val str: String)
 
-        inline operator fun String.not(): StringAndNewLine {
+        inline fun editorFoldOf(foldName: String, block: PrintWriterWrapper.() -> Unit) {
+            +!"//<editor-fold desc=\"${foldName}\">"
+            block()
+            +!"//</editor-fold>"
+        }
+
+        operator fun String.not(): StringAndNewLine {
             return StringAndNewLine(this)
         }
 
-        inline operator fun String.unaryPlus() {
+        operator fun String.unaryPlus() {
+            if (newLine) {
+                printer.print("    ".repeat(indentCount))
+                newLine = false
+            }
             printer.print(this)
         }
 
-        inline operator fun StringAndNewLine.unaryPlus() {
+        operator fun StringAndNewLine.unaryPlus() {
+            if (newLine) {
+                printer.print("    ".repeat(indentCount))
+                newLine = false
+            }
             printer.println(this.str)
+            newLine = true
         }
 
-        inline infix fun <T> String.join(iter: Iterable<T>): String {
+        infix fun <T> String.join(iter: Iterable<T>): String {
             return iter.joinToString(this)
         }
     }

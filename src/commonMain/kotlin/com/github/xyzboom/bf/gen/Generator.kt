@@ -9,6 +9,7 @@ import com.github.xyzboom.bf.tree.RefNode
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlin.jvm.JvmOverloads
 
+@Deprecated("Deprecated", replaceWith = ReplaceWith("AbstractGenerator"))
 open class Generator(
     val def: Definition,
     val strategy: IGenerateStrategy
@@ -26,7 +27,11 @@ open class Generator(
             return RefNode(ref)
         }
         // NamedTreeNode by default, unsafe cast is actually safe
-        return NamedTreeNode(name, mutableListOf(), context)
+        return NamedTreeNode(name, mutableListOf()).apply {
+            if (context != null) {
+                parent = context
+            }
+        }
     }
 
     fun generate(name: String): INode {

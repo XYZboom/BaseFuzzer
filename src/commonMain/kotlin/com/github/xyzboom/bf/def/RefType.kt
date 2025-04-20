@@ -7,6 +7,14 @@ enum class RefType(val typeString: String) {
     NULLABLE("?"),
     ONE_OR_MORE("+"),
     ZERO_OR_MORE("*");
+
+    fun canBeMulti(): Boolean {
+        return when (this) {
+            NON_NULL, NULLABLE -> false
+            ONE_OR_MORE, ZERO_OR_MORE -> true
+        }
+    }
+
     companion object {
         @JvmStatic
         val DEFAULT = NON_NULL
