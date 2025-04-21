@@ -9,4 +9,7 @@ open class NamedTreeNode @JvmOverloads constructor(
     override val children: MutableList<INode> = mutableListOf(),
 ): INode, IName, ITreeNode {
     override lateinit var parent: INode
+    override fun addChild(node: INode) {
+        children.add(node)
+    }
 }

@@ -310,20 +310,16 @@ class DefinitionProcessor(
                     }
 
                     fun writeGenChildrenCode(refList: ReferenceList) {
-                        +!"result.children.apply {"
-                        indentCount++
                         for (ref in refList) {
                             when (ref.type) {
-                                NON_NULL -> +!"add(${ref.name.nameForGenFunction}(result))"
+                                NON_NULL -> +!"result.addChild(${ref.name.nameForGenFunction}(result))"
                                 else -> {
                                     +!"repeat(${nameForChooseSizeFunction(name, ref.name)}(result)) {"
-                                    +!"    add(${ref.name.nameForGenFunction}(result))"
+                                    +!"    result.addChild(${ref.name.nameForGenFunction}(result))"
                                     +!"}"
                                 }
                             }
                         }
-                        indentCount--
-                        +!"}"
                     }
 
                     if (stat.contents.size > 1) {
@@ -379,7 +375,7 @@ class DefinitionProcessor(
         parents: Set<String>
     ) {
 
-        fun genContentProperties(refList: ReferenceList, impl: Boolean = false) {
+        fun genContentPropertiesAndAddChildFunction(refList: ReferenceList, impl: Boolean = false) {
             for (ref in refList) {
                 if (impl) {
                     +"override "
@@ -396,6 +392,24 @@ class DefinitionProcessor(
                 }
                 +!""
             }
+            +!"override fun ${ITreeParent::addChild.name}(node: INode) {"
+            indentCount++
+            +!"when (node) {"
+            indentCount++
+            for (ref in refList) {
+                +"is ${ref.name.nameForNode} -> "
+                +!when (ref.type) {
+                    NON_NULL, NULLABLE -> "${ref.name.nameForChildProperty(false)} = node"
+                    ONE_OR_MORE, ZERO_OR_MORE -> "${ref.name.nameForChildProperty(true)}.add(node)"
+                }
+            }
+            +!"else -> {} // currently do nothing"
+            indentCount--
+            +!"}"
+            //
+            +!"${ITreeParent::children.name}.add(node)"
+            indentCount--
+            +!"}"
         }
 
         +"interface ${name.nameForNode} : ${INode::class.simpleName}"
@@ -414,7 +428,7 @@ class DefinitionProcessor(
         +!" {"
         indentCount++
         if (reference.size == 1) {
-            genContentProperties(reference.single())
+            genContentPropertiesAndAddChildFunction(reference.single())
         }
         +!"override fun <D, R> accept(visitor: IVisitor<D, R>, data: D): R {"
         indentCount++
@@ -465,13 +479,13 @@ class DefinitionProcessor(
             if (reference.isNotEmpty()) {
                 +!"override val ${ITreeParent::children.name}: MutableList<INode> = mutableListOf()"
             }
-            genContentProperties(refList, true)
+            genContentPropertiesAndAddChildFunction(refList, true)
             indentCount--
             +!"}"
             if (reference.size > 1) {
                 +!"interface ${name.nameForNode}${i} : ${name.nameForNode} {"
                 indentCount++
-                genContentProperties(refList)
+                genContentPropertiesAndAddChildFunction(refList)
                 indentCount--
                 +!"}"
             }
