@@ -13,4 +13,8 @@ abstract class AbstractGenerator() {
             is ITreeChild -> parent.depth + 1
             else -> 1
         }
+
+    companion object {
+        const val DEFAULT_MAX_SIZE = 5
+    }
 }

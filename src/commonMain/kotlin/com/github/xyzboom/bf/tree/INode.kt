@@ -1,3 +1,7 @@
 package com.github.xyzboom.bf.tree
 
-interface INode
+interface INode {
+    fun <D, R> accept(visitor: IVisitor<D, R>, data: D): R {
+        return visitor.visitNode(this, data)
+    }
+}

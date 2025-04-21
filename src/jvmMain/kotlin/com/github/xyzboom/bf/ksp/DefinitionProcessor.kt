@@ -94,6 +94,34 @@ class DefinitionProcessor(
         get(): String {
             return "generated${uppercaseFirstChar()}Nodes"
         }
+
+    private val String.nameForVisitFunction
+        get(): String {
+            return "visit${uppercaseFirstChar()}Node"
+        }
+
+    private fun nameForChooseSizeFunction(parentName: String, childName: String): String {
+        return "choose${childName.uppercaseFirstChar()}SizeWhenParentIs${parentName.uppercaseFirstChar()}"
+    }
+
+    @JvmInline
+    private value class DeclValName(val value: String)
+
+    private val DeclValName.visitorClassName
+        get(): String {
+            return "I${value.uppercaseFirstChar()}Visitor"
+        }
+
+    private val DeclValName.topDownVisitorClassName
+        get(): String {
+            return "I${value.uppercaseFirstChar()}TopDownVisitor"
+        }
+
+    private val DeclValName.generatorClassName
+        get(): String {
+            return "${value.uppercaseFirstChar()}Generator"
+        }
+
     //</editor-fold>
 
     @OptIn(KspExperimental::class)
@@ -133,23 +161,58 @@ class DefinitionProcessor(
         val def = Parser().parseDefinition(anno.defValue)
         val packagePrefix = defDecl.packageName.asString()
         val packageName = if (packagePrefix.isNotEmpty()) "${packagePrefix}.${NAME_GENERATED}" else NAME_GENERATED
-        val declValName = defDecl.simpleName.asString()
-        newFile(containingFile, packageName, "${declValName}Nodes") {
+        val declValName = DeclValName(defDecl.simpleName.asString())
+        newFile(containingFile, packageName, "${declValName.value}Nodes") {
             writeClassHead(packageName)
             for ((name, stat) in def.statementsMap) {
-                newClassForStatement(name, stat.contents, def.parentMap[name] ?: emptySet())
+                newClassForStatement(declValName, name, stat.contents, def.parentMap[name] ?: emptySet())
             }
         }
-        val generatorName = "${declValName.uppercaseFirstChar()}Generator"
-        createGeneratorClass(containingFile, packageName, generatorName, def)
+        createGeneratorClass(containingFile, packageName, declValName, def)
+        createVisitorClass(containingFile, packageName, declValName, def)
+    }
+
+    private fun createVisitorClass(
+        containingFile: KSFile,
+        packageName: String,
+        declValName: DeclValName,
+        def: Definition
+    ) {
+        val visitorName = declValName.visitorClassName
+        newFile(containingFile, packageName, visitorName) {
+            writeClassHead(packageName)
+            +!"interface $visitorName<D, R> : ${IVisitor::class.simpleName!!}<D, R> {"
+            indentCount++
+            for ((name, _) in def.statementsMap) {
+                +!"fun ${name.nameForVisitFunction}(node: ${name.nameForNode}, data: D): R {"
+                +!"    return ${IVisitor<*, *>::visitNode.name}(node, data)"
+                +!"}"
+            }
+            indentCount--
+            +!"}"
+        }
+        val topDownVisitorName = declValName.topDownVisitorClassName
+        newFile(containingFile, packageName, topDownVisitorName) {
+            writeClassHead(packageName)
+            +!"interface $topDownVisitorName<D> : $visitorName<D, Unit> {"
+            indentCount++
+            +!"override fun visitNode(node: ${INode::class.simpleName!!}, data: D) {"
+            indentCount++
+            +!"if (node is ${ITreeParent::class.simpleName!!}) node.acceptChildren(this, data)"
+            indentCount--
+            +!"}"
+            indentCount--
+            +!"}"
+        }
     }
 
     private fun createGeneratorClass(
         containingFile: KSFile,
         packageName: String,
-        generatorName: String,
+        declValName: DeclValName,
         def: Definition
     ) {
+        val generatorName = declValName.generatorClassName
         newFile(containingFile, packageName, generatorName) {
             writeClassHead(packageName)
             +!"open class $generatorName : ${AbstractGenerator::class.simpleName!!}() {"
@@ -195,6 +258,36 @@ class DefinitionProcessor(
                     }
                 }
             }
+            editorFoldOf("choose size functions") {
+                for ((name, stat) in def.statementsMap) {
+                    for ((i, refList) in stat.contents.withIndex()) {
+                        for (ref in refList) {
+                            // NON_NULL always has size 1
+                            val refType = ref.type
+                            if (refType == NON_NULL) continue
+                            +"open fun ${
+                                nameForChooseSizeFunction(
+                                    "$name${if (stat.contents.size > 1) i else ""}",
+                                    ref.name
+                                )
+                            }"
+                            +!"(parent: ${name.nameForNode}): Int {"
+                            indentCount++
+                            +"return "
+                            +!when (refType) {
+                                NULLABLE -> "random.nextInt(2)"
+                                ONE_OR_MORE -> "random.nextInt(${AbstractGenerator::DEFAULT_MAX_SIZE.name}) + 1"
+
+                                ZERO_OR_MORE -> "random.nextInt(-1, ${AbstractGenerator::DEFAULT_MAX_SIZE.name}) + 1"
+
+                                else -> throw NoWhenBranchMatchedException()
+                            }
+                            indentCount--
+                            +!"}"
+                        }
+                    }
+                }
+            }
             editorFoldOf("new node functions") {
                 for ((name, _) in def.statementsMap) {
                     +!"open fun ${name.nameForNewNodeFunction}(): ${name.nameForNode} {"
@@ -215,6 +308,24 @@ class DefinitionProcessor(
                     if (hasParent) {
                         +!"result.${ITreeChild::parent.name} = parent"
                     }
+
+                    fun writeGenChildrenCode(refList: ReferenceList) {
+                        +!"result.children.apply {"
+                        indentCount++
+                        for (ref in refList) {
+                            when (ref.type) {
+                                NON_NULL -> +!"add(${ref.name.nameForGenFunction}(result))"
+                                else -> {
+                                    +!"repeat(${nameForChooseSizeFunction(name, ref.name)}(result)) {"
+                                    +!"    add(${ref.name.nameForGenFunction}(result))"
+                                    +!"}"
+                                }
+                            }
+                        }
+                        indentCount--
+                        +!"}"
+                    }
+
                     if (stat.contents.size > 1) {
                         +"when (val index = ${name.nameForChooseIndexFunction}("
                         if (hasParent) {
@@ -222,16 +333,6 @@ class DefinitionProcessor(
                         }
                         +!")) {"
                         indentCount++
-
-                        fun writeGenChildrenCode(refList: ReferenceList) {
-                            +!"result.children.apply {"
-                            indentCount++
-                            for (ref in refList) {
-                                +!"add(${ref.name.nameForGenFunction}(result))"
-                            }
-                            indentCount--
-                            +!"}"
-                        }
 
                         for ((i, refList) in stat.contents.withIndex()) {
                             +"$i -> "
@@ -242,6 +343,8 @@ class DefinitionProcessor(
                         +!"\")"
                         indentCount--
                         +!"}"
+                    } else if (stat.contents.size == 1) {
+                        writeGenChildrenCode(stat.contents.single())
                     }
                     +!"return result"
                     indentCount--
@@ -270,6 +373,7 @@ class DefinitionProcessor(
     }
 
     private fun PrintWriterWrapper.newClassForStatement(
+        declValName: DeclValName,
         name: String,
         reference: List<ReferenceList>,
         parents: Set<String>
@@ -308,11 +412,19 @@ class DefinitionProcessor(
             +(", " join parents.map { it.nameForChild })
         }
         +!" {"
+        indentCount++
         if (reference.size == 1) {
-            indentCount++
             genContentProperties(reference.single())
-            indentCount--
         }
+        +!"override fun <D, R> accept(visitor: IVisitor<D, R>, data: D): R {"
+        indentCount++
+        +!"if (visitor is ${declValName.visitorClassName}<D, R>) {"
+        +!"    return visitor.${name.nameForVisitFunction}(this, data)"
+        +!"}"
+        +!"return super<INode>.accept(visitor, data)"
+        indentCount--
+        +!"}"
+        indentCount--
         +!"}\n"
 
         if (reference.isNotEmpty()) {
@@ -371,12 +483,13 @@ class DefinitionProcessor(
         +!""
         +!"package $packageName"
         +!""
-        +!"import ${INode::class.qualifiedName}"
-        +!"import ${IRef::class.qualifiedName}"
-        +!"import ${ITreeParent::class.qualifiedName}"
-        +!"import ${ITreeChild::class.qualifiedName}"
-        +!"import ${RefNode::class.qualifiedName}"
-        +!"import ${AbstractGenerator::class.qualifiedName}"
+        +!"import ${INode::class.qualifiedName!!}"
+        +!"import ${IRef::class.qualifiedName!!}"
+        +!"import ${ITreeParent::class.qualifiedName!!}"
+        +!"import ${ITreeChild::class.qualifiedName!!}"
+        +!"import ${IVisitor::class.qualifiedName!!}"
+        +!"import ${RefNode::class.qualifiedName!!}"
+        +!"import ${AbstractGenerator::class.qualifiedName!!}"
         +!""
     }
 
