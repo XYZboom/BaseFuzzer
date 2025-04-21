@@ -233,12 +233,12 @@ class DefinitionProcessor(
                 for ((name, _) in def.statementsMap) {
                     +"open fun ${name.nameForChooseReferenceFunction}("
                     if (def.parentMap[name] != null) {
-                        +"parent: ${name.nameForNode}"
+                        +"parent: ${name.nameForParent}"
                     }
-                    +!"): IRef? {"
+                    +!"): ${IRef::class.simpleName!!}? {"
                     indentCount++
                     +!"if (random.nextBoolean()) return null"
-                    +!"return ${RefNode::class.simpleName}(${name.nameForGeneratedNodesProperty}.random(random))"
+                    +!"return ${RefNode::class.simpleName!!}(${name.nameForGeneratedNodesProperty}.random(random))"
                     indentCount--
                     +!"}"
                 }
@@ -304,6 +304,12 @@ class DefinitionProcessor(
                     }
                     +!"): ${INode::class.simpleName} {"
                     indentCount++
+                    +"val chooseRef = ${name.nameForChooseReferenceFunction}("
+                    if (hasParent) {
+                        +"parent"
+                    }
+                    +!")"
+                    +!"if (chooseRef != null) return chooseRef"
                     +!"val result = ${name.nameForNewNodeFunction}()"
                     if (hasParent) {
                         +!"result.${ITreeChild::parent.name} = parent"
