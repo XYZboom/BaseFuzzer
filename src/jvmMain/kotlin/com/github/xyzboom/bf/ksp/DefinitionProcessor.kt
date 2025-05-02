@@ -104,6 +104,11 @@ class DefinitionProcessor(
         return "choose${childName.uppercaseFirstChar()}SizeWhenParentIs${parentName.uppercaseFirstChar()}"
     }
 
+    private val String.nameForChoiceEnum
+        get(): String {
+            return uppercaseFirstChar()
+        }
+
     @JvmInline
     private value class DeclValName(val value: String)
 
@@ -337,8 +342,11 @@ class DefinitionProcessor(
                         indentCount++
 
                         for ((i, refList) in stat.contents.withIndex()) {
-                            +"$i -> "
+                            +!"$i -> {"
+                            indentCount++
                             writeGenChildrenCode(refList)
+                            indentCount--
+                            +!"}"
                         }
                         +"else -> throw ${IllegalArgumentException::class.qualifiedName!!}(\""
                         +"Index: ${'$'}index returned from ${name.nameForChooseIndexFunction} is illegal."
@@ -515,6 +523,7 @@ class DefinitionProcessor(
 
     companion object {
         const val NAME_GENERATED = "generated"
+        const val NAME_CHOICE = "Choice"
     }
 
     private class PrintWriterWrapper(private val printer: PrintWriter) : Closeable by printer {
