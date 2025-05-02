@@ -316,6 +316,7 @@ class DefinitionProcessor(
                     +!")"
                     +!"if (chooseRef != null) return chooseRef"
                     +!"val result = ${name.nameForNewNodeFunction}()"
+                    +!"${name.nameForGeneratedNodesProperty}.add(result)"
                     if (hasParent) {
                         +!"result.${ITreeChild::parent.name} = parent"
                     }
