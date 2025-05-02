@@ -394,7 +394,7 @@ class DefinitionProcessor(
             for (ref in refList) {
                 if (impl) {
                     +"override "
-                    if (ref.type != NULLABLE) {
+                    if (ref.type == NON_NULL) {
                         +"lateinit "
                     }
                 }
@@ -403,7 +403,7 @@ class DefinitionProcessor(
                 +when (ref.type) {
                     NON_NULL -> nodeName
                     NULLABLE -> "${nodeName}?${if (impl) " = null" else ""}"
-                    ONE_OR_MORE, ZERO_OR_MORE -> "MutableList<${nodeName}>"
+                    ONE_OR_MORE, ZERO_OR_MORE -> "MutableList<${nodeName}> ${if (impl) "= mutableListOf()" else ""}"
                 }
                 +!""
             }
