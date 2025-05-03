@@ -16,6 +16,7 @@ import com.google.devtools.ksp.symbol.*
 import java.io.Closeable
 import java.io.OutputStreamWriter
 import java.io.PrintWriter
+import kotlin.reflect.KProperty
 
 class DefinitionProcessor(
     private val codeGen: CodeGenerator,
@@ -131,6 +132,7 @@ class DefinitionProcessor(
     //</editor-fold>
 
     private val noParentNodeNames = mutableSetOf<String>()
+    private val noCacheNodeNames = mutableSetOf<String>()
 
     @OptIn(KspExperimental::class)
     private fun handleDef(defDecl: KSAnnotated) {
@@ -187,7 +189,7 @@ class DefinitionProcessor(
             logger.error("Error when parsing extra value of declaration", defDecl)
             return
         }
-        val builtins: YamlNode = yamlNode[NAME_EXTRA_BUILTIN] ?: run {
+        val builtins: YamlNode = yamlNode[KEY_EXTRA_BUILTIN] ?: run {
             logger.error("Error when parsing built-in extra value of declaration", defDecl)
             return
         }
@@ -195,18 +197,24 @@ class DefinitionProcessor(
             logger.error("Error when parsing built-in extra value of declaration", defDecl)
             return
         }
-        val noParentList: YamlNode = builtins[NAME_BUILTIN_NO_PARENT] ?: run {
-            logger.error("Error when parsing no-parent built-in extra value of declaration", defDecl)
-            return
+
+        fun parseNameSet(set: MutableSet<String>, builtinKey: String) {
+            val node: YamlNode = builtins[builtinKey] ?: return
+            if (node !is YamlList) {
+                logger.error(
+                    "Error when parsing $builtinKey built-in extra value of declaration. " +
+                            "Expect YamlList, actually: ${node::class.simpleName}", defDecl
+                )
+                return
+            }
+            set.addAll(node.items.mapNotNull {
+                if (it !is YamlScalar) return@mapNotNull null
+                it.content
+            })
         }
-        if (noParentList !is YamlList) {
-            logger.error("Error when parsing no-parent built-in extra value of declaration", defDecl)
-            return
-        }
-        noParentNodeNames.addAll(noParentList.items.mapNotNull {
-            if (it !is YamlScalar) return@mapNotNull null
-            it.content
-        })
+
+        parseNameSet(noParentNodeNames, KEY_BUILTIN_NO_PARENT)
+        parseNameSet(noCacheNodeNames, KEY_BUILTIN_NO_CACHE)
     }
 
     private fun createVisitorClass(
@@ -256,12 +264,16 @@ class DefinitionProcessor(
             indentCount++
             editorFoldOf("generated nodes") {
                 for ((name, _) in def.statementsMap) {
-                    +!"val ${name.nameForGeneratedNodesProperty}: MutableList<${name.nameForNode}> = mutableListOf()"
+                    if (name !in noCacheNodeNames) {
+                        +!"val ${name.nameForGeneratedNodesProperty}: MutableList<${name.nameForNode}> = mutableListOf()"
+                    }
                 }
                 +!"open fun clearGeneratedNodes() {"
                 indentCount++
                 for ((name, _) in def.statementsMap) {
-                    +!"${name.nameForGeneratedNodesProperty}.clear()"
+                    if (name !in noCacheNodeNames) {
+                        +!"${name.nameForGeneratedNodesProperty}.clear()"
+                    }
                 }
                 indentCount--
                 +!"}"
@@ -274,8 +286,12 @@ class DefinitionProcessor(
                     }
                     +!"): ${IRef::class.simpleName!!}? {"
                     indentCount++
-                    +!"if (random.nextBoolean()) return null"
-                    +!"return ${RefNode::class.simpleName!!}(${name.nameForGeneratedNodesProperty}.random(random))"
+                    if (name !in noCacheNodeNames) {
+                        +!"if (random.nextBoolean()) return null"
+                        +!"return ${RefNode::class.simpleName!!}(${name.nameForGeneratedNodesProperty}.random(random))"
+                    } else {
+                        +!"return null"
+                    }
                     indentCount--
                     +!"}"
                 }
@@ -348,7 +364,9 @@ class DefinitionProcessor(
                     +!")"
                     +!"if (chooseRef != null) return chooseRef"
                     +!"val result = ${name.nameForNewNodeFunction}()"
-                    +!"${name.nameForGeneratedNodesProperty}.add(result)"
+                    if (name !in noCacheNodeNames) {
+                        +!"${name.nameForGeneratedNodesProperty}.add(result)"
+                    }
                     if (hasParent && name !in noParentNodeNames) {
                         +!"result.${ITreeChild::parent.name} = parent"
                     }
@@ -566,8 +584,9 @@ class DefinitionProcessor(
 
     companion object {
         const val NAME_GENERATED = "generated"
-        const val NAME_EXTRA_BUILTIN = "builtin"
-        const val NAME_BUILTIN_NO_PARENT = "no-parent"
+        const val KEY_EXTRA_BUILTIN = "builtin"
+        const val KEY_BUILTIN_NO_PARENT = "no-parent"
+        const val KEY_BUILTIN_NO_CACHE = "no-cache"
     }
 
     private class PrintWriterWrapper(private val printer: PrintWriter) : Closeable by printer {

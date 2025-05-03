@@ -6,6 +6,11 @@ const val extra = """
 builtin:
   no-parent:
     - classKind
+    - declName
+    - lang
+  no-cache:
+    - classKind
+    - lang
 """
 
 @DefinitionDecl(def, extra)
