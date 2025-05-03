@@ -1,5 +1,10 @@
 package com.github.xyzboom.bf.ksp
 
+import com.charleskorn.kaml.Yaml
+import com.charleskorn.kaml.YamlList
+import com.charleskorn.kaml.YamlMap
+import com.charleskorn.kaml.YamlNode
+import com.charleskorn.kaml.YamlScalar
 import com.github.xyzboom.bf.def.*
 import com.github.xyzboom.bf.def.RefType.*
 import com.github.xyzboom.bf.gen.AbstractGenerator
@@ -48,6 +53,7 @@ class DefinitionProcessor(
     //<editor-fold desc="Names">
     private val String.nameForParent
         get(): String {
+            require(this !in noParentNodeNames)
             return "I${uppercaseFirstChar()}Parent"
         }
 
@@ -104,11 +110,6 @@ class DefinitionProcessor(
         return "choose${childName.uppercaseFirstChar()}SizeWhenParentIs${parentName.uppercaseFirstChar()}"
     }
 
-    private val String.nameForChoiceEnum
-        get(): String {
-            return uppercaseFirstChar()
-        }
-
     @JvmInline
     private value class DeclValName(val value: String)
 
@@ -128,6 +129,8 @@ class DefinitionProcessor(
         }
 
     //</editor-fold>
+
+    private val noParentNodeNames = mutableSetOf<String>()
 
     @OptIn(KspExperimental::class)
     private fun handleDef(defDecl: KSAnnotated) {
@@ -164,6 +167,7 @@ class DefinitionProcessor(
         }
         val anno = defDecl.getAnnotationsByType(DefinitionDecl::class).single()
         val def = Parser().parseDefinition(anno.defValue)
+        parseExtra(defDecl, anno.extraValue)
         val packagePrefix = defDecl.packageName.asString()
         val packageName = if (packagePrefix.isNotEmpty()) "${packagePrefix}.${NAME_GENERATED}" else NAME_GENERATED
         val declValName = DeclValName(defDecl.simpleName.asString())
@@ -175,6 +179,34 @@ class DefinitionProcessor(
         }
         createGeneratorClass(containingFile, packageName, declValName, def)
         createVisitorClass(containingFile, packageName, declValName, def)
+    }
+
+    private fun parseExtra(defDecl: KSNode, extraValue: String) {
+        val yamlNode = Yaml.default.parseToYamlNode(extraValue)
+        if (yamlNode !is YamlMap) {
+            logger.error("Error when parsing extra value of declaration", defDecl)
+            return
+        }
+        val builtins: YamlNode = yamlNode[NAME_EXTRA_BUILTIN] ?: run {
+            logger.error("Error when parsing built-in extra value of declaration", defDecl)
+            return
+        }
+        if (builtins !is YamlMap) {
+            logger.error("Error when parsing built-in extra value of declaration", defDecl)
+            return
+        }
+        val noParentList: YamlNode = builtins[NAME_BUILTIN_NO_PARENT] ?: run {
+            logger.error("Error when parsing no-parent built-in extra value of declaration", defDecl)
+            return
+        }
+        if (noParentList !is YamlList) {
+            logger.error("Error when parsing no-parent built-in extra value of declaration", defDecl)
+            return
+        }
+        noParentNodeNames.addAll(noParentList.items.mapNotNull {
+            if (it !is YamlScalar) return@mapNotNull null
+            it.content
+        })
     }
 
     private fun createVisitorClass(
@@ -237,7 +269,7 @@ class DefinitionProcessor(
             editorFoldOf("choose reference") {
                 for ((name, _) in def.statementsMap) {
                     +"open fun ${name.nameForChooseReferenceFunction}("
-                    if (def.parentMap[name] != null) {
+                    if (def.parentMap[name] != null && name !in noParentNodeNames) {
                         +"parent: ${name.nameForParent}"
                     }
                     +!"): ${IRef::class.simpleName!!}? {"
@@ -304,30 +336,32 @@ class DefinitionProcessor(
                 for ((name, stat) in def.statementsMap) {
                     +"open fun ${name.nameForGenFunction}("
                     val hasParent = def.parentMap[name] != null
-                    if (hasParent) {
+                    if (hasParent && name !in noParentNodeNames) {
                         +"parent: ${name.nameForParent}"
                     }
                     +!"): ${INode::class.simpleName} {"
                     indentCount++
                     +"val chooseRef = ${name.nameForChooseReferenceFunction}("
-                    if (hasParent) {
+                    if (hasParent && name !in noParentNodeNames) {
                         +"parent"
                     }
                     +!")"
                     +!"if (chooseRef != null) return chooseRef"
                     +!"val result = ${name.nameForNewNodeFunction}()"
                     +!"${name.nameForGeneratedNodesProperty}.add(result)"
-                    if (hasParent) {
+                    if (hasParent && name !in noParentNodeNames) {
                         +!"result.${ITreeChild::parent.name} = parent"
                     }
 
                     fun writeGenChildrenCode(refList: ReferenceList) {
                         for (ref in refList) {
+                            val refName = ref.name
+                            val argument = if (refName in noParentNodeNames) "" else "result"
                             when (ref.type) {
-                                NON_NULL -> +!"result.addChild(${ref.name.nameForGenFunction}(result))"
+                                NON_NULL -> +!"result.addChild(${refName.nameForGenFunction}($argument))"
                                 else -> {
-                                    +!"repeat(${nameForChooseSizeFunction(name, ref.name)}(result)) {"
-                                    +!"    result.addChild(${ref.name.nameForGenFunction}(result))"
+                                    +!"repeat(${nameForChooseSizeFunction(name, refName)}(result)) {"
+                                    +!"    result.addChild(${refName.nameForGenFunction}($argument))"
                                     +!"}"
                                 }
                             }
@@ -432,10 +466,18 @@ class DefinitionProcessor(
             // extends Parent interfaces
             +", ${ITreeParent::class.simpleName}, "
             +(", " join reference.flatMap {
-                it.references.map { it1 -> it1.name.nameForParent }
+                it.references.mapNotNull { it1 ->
+                    val it1Name = it1.name
+                    if (it1Name !in noParentNodeNames)
+                        it1Name.nameForParent
+                    else null
+                }
             }.toSet())
         }
-        if (parents.isNotEmpty()) {
+        logger.warn(name)
+        logger.warn(noParentNodeNames.joinToString())
+        logger.warn("${name in noParentNodeNames}")
+        if (parents.isNotEmpty() && name !in noParentNodeNames) {
             +", ${ITreeChild::class.simpleName}, "
             // current node is a child of parent
             +(", " join parents.map { it.nameForChild })
@@ -461,13 +503,13 @@ class DefinitionProcessor(
             +!"sealed interface ${name.nameForChild} : ${INode::class.simpleName}\n"
         }
 
-        if (parents.isNotEmpty()) {
+        if (parents.isNotEmpty() && name !in noParentNodeNames) {
             +!"sealed interface ${name.nameForParent} : ${INode::class.simpleName}"
         }
 
         if (reference.isEmpty()) {
             +!"open class ${name.nameForDefaultNode} : ${name.nameForNode} {"
-            if (parents.isNotEmpty()) {
+            if (parents.isNotEmpty() && name !in noParentNodeNames) {
                 +!"    override lateinit var ${ITreeChild::parent.name}: ${INode::class.simpleName}"
             }
             if (reference.isNotEmpty()) {
@@ -488,7 +530,7 @@ class DefinitionProcessor(
             }
             +!" {"
             indentCount++
-            if (parents.isNotEmpty()) {
+            if (parents.isNotEmpty() && name !in noParentNodeNames) {
                 +!"override lateinit var ${ITreeChild::parent.name}: ${INode::class.simpleName}"
             }
             if (reference.isNotEmpty()) {
@@ -524,7 +566,8 @@ class DefinitionProcessor(
 
     companion object {
         const val NAME_GENERATED = "generated"
-        const val NAME_CHOICE = "Choice"
+        const val NAME_EXTRA_BUILTIN = "builtin"
+        const val NAME_BUILTIN_NO_PARENT = "no-parent"
     }
 
     private class PrintWriterWrapper(private val printer: PrintWriter) : Closeable by printer {

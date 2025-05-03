@@ -3,11 +3,9 @@ package com.github.xyzboom.bf.ksp
 import com.github.xyzboom.bf.def.DefinitionDecl
 
 const val extra = """
-tree-child:
-  - class
-  - field
-  - func
-  - memberMethod
+builtin:
+  no-parent:
+    - classKind
 """
 
 @DefinitionDecl(def, extra)
