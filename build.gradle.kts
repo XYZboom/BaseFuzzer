@@ -98,6 +98,8 @@ kotlin {
         jvmMain {
             dependencies {
                 implementation(libs.ksp)
+                implementation(libs.kotlin.poet)
+                implementation(libs.kotlin.poet.ksp)
             }
         }
         jvmTest {

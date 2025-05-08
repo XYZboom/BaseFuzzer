@@ -9,9 +9,17 @@ import com.google.devtools.ksp.KspExperimental
 import com.google.devtools.ksp.getAnnotationsByType
 import com.google.devtools.ksp.processing.*
 import com.google.devtools.ksp.symbol.*
-import java.io.Closeable
-import java.io.OutputStreamWriter
-import java.io.PrintWriter
+import com.squareup.kotlinpoet.ClassName
+import com.squareup.kotlinpoet.CodeBlock
+import com.squareup.kotlinpoet.FileSpec
+import com.squareup.kotlinpoet.KModifier
+import com.squareup.kotlinpoet.PropertySpec
+import com.squareup.kotlinpoet.TypeSpec
+import com.squareup.kotlinpoet.FunSpec
+import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.parameterizedBy
+import com.squareup.kotlinpoet.TypeVariableName
+import com.squareup.kotlinpoet.asClassName
+import com.squareup.kotlinpoet.ksp.writeTo
 import kotlin.reflect.KClass
 
 class DefinitionProcessor(
@@ -180,7 +188,6 @@ class DefinitionProcessor(
         val packageName = if (packagePrefix.isNotEmpty()) "${packagePrefix}.${NAME_GENERATED}" else NAME_GENERATED
         val declValName = DeclValName(defDecl.simpleName.asString())
         newFile(containingFile, packageName, "${declValName.value}Nodes") {
-            writeClassHead(packageName)
             for ((name, stat) in def.statementsMap) {
                 newClassForStatement(declValName, name, stat.contents, def.parentMap[name] ?: emptySet())
             }
@@ -228,29 +235,47 @@ class DefinitionProcessor(
     ) {
         val visitorName = declValName.visitorClassName
         newFile(containingFile, packageName, visitorName) {
-            writeClassHead(packageName)
-            +!"interface $visitorName<D, R> : ${IVisitor::class.simpleName!!}<D, R> {"
-            indentCount++
-            for ((name, _) in def.statementsMap) {
-                +!"fun ${name.nameForVisitFunction}(node: ${name.nameForImpl}, data: D): R {"
-                +!"    return ${IVisitor<*, *>::visitNode.name}(node, data)"
-                +!"}"
-            }
-            indentCount--
-            +!"}"
+            addType(
+                TypeSpec.interfaceBuilder(visitorName).apply {
+                    val d = TypeVariableName("D")
+                    val r = TypeVariableName("R")
+                    addTypeVariable(d)
+                    addTypeVariable(r)
+                    addSuperinterface(IVisitor::class.asClassName().parameterizedBy(d, r))
+                    for ((name, _) in def.statementsMap) {
+                        addFunction(
+                            FunSpec.builder(name.nameForVisitFunction).apply {
+                                addParameter("node", ClassName(packageName, name.nameForImpl))
+                                addParameter("data", d)
+                                returns(r)
+                                addStatement("return ${IVisitor<*, *>::visitNode.name}(node, data)")
+                            }.build()
+                        )
+                    }
+                }.build()
+            )
         }
         val topDownVisitorName = declValName.topDownVisitorClassName
         newFile(containingFile, packageName, topDownVisitorName) {
-            writeClassHead(packageName)
-            +!"interface $topDownVisitorName<D> : $visitorName<D, Unit> {"
-            indentCount++
-            +!"override fun visitNode(node: ${INode::class.simpleName!!}, data: D) {"
-            indentCount++
-            +!"if (node is ${ITreeParent::class.simpleName!!}) node.acceptChildren(this, data)"
-            indentCount--
-            +!"}"
-            indentCount--
-            +!"}"
+            val d = TypeVariableName("D")
+            addType(
+                TypeSpec.interfaceBuilder(topDownVisitorName).apply {
+                    addTypeVariable(d)
+                    addSuperinterface(
+                        ClassName(packageName, visitorName).parameterizedBy(d, Unit::class.asClassName())
+                    )
+                    addFunction(
+                        FunSpec.builder("visitNode").apply {
+                            addModifiers(KModifier.OVERRIDE)
+                            addParameter("node", INode::class)
+                            addParameter("data", d)
+                            beginControlFlow("if (node is %T)", ITreeParent::class)
+                            addStatement("node.acceptChildren(this, data)")
+                            endControlFlow()
+                        }.build()
+                    )
+                }.build()
+            )
         }
     }
 
@@ -262,163 +287,195 @@ class DefinitionProcessor(
     ) {
         val generatorName = declValName.generatorClassName
         newFile(containingFile, packageName, generatorName) {
-            writeClassHead(packageName)
-            +!"open class $generatorName : ${AbstractGenerator::class.simpleName!!}() {"
-            indentCount++
-            editorFoldOf("generated nodes") {
-                for ((name, _) in def.statementsMap) {
-                    if (name !in noCacheNodeNames) {
-                        +!"val ${name.nameForGeneratedNodesProperty}: MutableList<${name.nameForNode}> = mutableListOf()"
-                    }
-                }
-                +!"open fun clearGeneratedNodes() {"
-                indentCount++
-                for ((name, _) in def.statementsMap) {
-                    if (name !in noCacheNodeNames) {
-                        +!"${name.nameForGeneratedNodesProperty}.clear()"
-                    }
-                }
-                indentCount--
-                +!"}"
-            }
-            editorFoldOf("choose reference") {
-                for ((name, _) in def.statementsMap) {
-                    +"open fun ${name.nameForChooseReferenceFunction}("
-                    if (def.parentMap[name] != null && name !in noParentNodeNames) {
-                        +"parent: ${name.nameForParent}"
-                    }
-                    +!"): ${IRef::class.simpleName!!}? {"
-                    indentCount++
-                    if (name !in noCacheNodeNames) {
-                        +!"if (random.nextBoolean()) return null"
-                        +!"return ${RefNode::class.simpleName!!}(${name.nameForGeneratedNodesProperty}.random(random))"
-                    } else {
-                        +!"return null"
-                    }
-                    indentCount--
-                    +!"}"
-                }
-            }
-            editorFoldOf("choose index functions") {
-                for ((name, stat) in def.statementsMap) {
-                    if (stat.contents.size > 1) {
-                        +"open fun ${name.nameForChooseIndexFunction}("
-                        if (def.parentMap[name] != null) {
-                            +"context: ${name.nameForParent}"
+            val type = TypeSpec.classBuilder(generatorName).apply type@{
+                addModifiers(KModifier.OPEN)
+                superclass(AbstractGenerator::class)
+                editorFoldOf("generated nodes") {
+                    for ((name, _) in def.statementsMap) {
+                        if (name !in noCacheNodeNames) {
+                            this@type.addProperty(
+                                PropertySpec.builder(
+                                    name.nameForGeneratedNodesProperty,
+                                    ClassName("kotlin.collections", "MutableList")
+                                        .parameterizedBy(ClassName(packageName, name.nameForNode))
+                                ).initializer("mutableListOf()").build()
+                            )
                         }
-                        +!"): Int {"
-                        indentCount++
-                        +!"return ${AbstractGenerator::random.name}.nextInt(${stat.contents.size})"
-                        indentCount--
-                        +!"}"
+                    }
+                    this@type.addFunction(
+                        FunSpec.builder("clearGeneratedNodes").apply {
+                            addModifiers(KModifier.OPEN)
+                            for ((name, _) in def.statementsMap) {
+                                if (name !in noCacheNodeNames) {
+                                    addStatement("${name.nameForGeneratedNodesProperty}.clear()")
+                                }
+                            }
+                        }.build()
+                    )
+                }
+                editorFoldOf("choose reference") {
+                    for ((name, _) in def.statementsMap) {
+                        this@type.addFunction(
+                            FunSpec.builder(name.nameForChooseReferenceFunction).apply {
+                                addModifiers(KModifier.OPEN)
+                                if (def.parentMap[name] != null && name !in noParentNodeNames) {
+                                    addParameter("parent", ClassName(packageName, name.nameForParent))
+                                }
+                                returns(IRef::class.asClassName().copy(nullable = true))
+                                if (name !in noCacheNodeNames) {
+                                    beginControlFlow("if (random.nextBoolean())")
+                                    addStatement("return null")
+                                    nextControlFlow("else")
+                                    addStatement(
+                                        "return %T(${name.nameForGeneratedNodesProperty}.random(random))",
+                                        RefNode::class
+                                    )
+                                    endControlFlow()
+                                } else {
+                                    addStatement("return null")
+                                }
+                            }.build()
+                        )
                     }
                 }
-            }
-            editorFoldOf("choose size functions") {
-                for ((name, stat) in def.statementsMap) {
-                    for ((i, refList) in stat.contents.withIndex()) {
-                        for (ref in refList) {
-                            // NON_NULL always has size 1
-                            val refType = ref.type
-                            if (refType == NON_NULL) continue
-                            +"open fun ${
-                                nameForChooseSizeFunction(
+                editorFoldOf("choose index functions") {
+                    for ((name, stat) in def.statementsMap) {
+                        if (stat.contents.size > 1) {
+                            this@type.addFunction(
+                                FunSpec.builder(name.nameForChooseIndexFunction).apply {
+                                    addModifiers(KModifier.OPEN)
+                                    if (def.parentMap[name] != null && name !in noParentNodeNames) {
+                                        addParameter("context", ClassName(packageName, name.nameForParent))
+                                    }
+                                    returns(Int::class)
+                                    addStatement("return ${AbstractGenerator::random.name}.nextInt(${stat.contents.size})")
+                                }.build()
+                            )
+                        }
+                    }
+                }
+                editorFoldOf("choose size functions") {
+                    for ((name, stat) in def.statementsMap) {
+                        for ((i, refList) in stat.contents.withIndex()) {
+                            for (ref in refList) {
+                                // NON_NULL always has size 1
+                                val refType = ref.type
+                                if (refType == NON_NULL) continue
+                                val funcName = nameForChooseSizeFunction(
                                     "$name${if (stat.contents.size > 1) i else ""}",
                                     ref.name
                                 )
-                            }"
-                            +!"(parent: ${name.nameForNode}): Int {"
-                            indentCount++
-                            +"return "
-                            +!when (refType) {
-                                NULLABLE -> "random.nextInt(2)"
-                                ONE_OR_MORE -> "random.nextInt(${AbstractGenerator::DEFAULT_MAX_SIZE.name}) + 1"
-
-                                ZERO_OR_MORE -> "random.nextInt(-1, ${AbstractGenerator::DEFAULT_MAX_SIZE.name}) + 1"
-
-                                else -> throw NoWhenBranchMatchedException()
+                                this@type.addFunction(
+                                    FunSpec.builder(funcName).apply {
+                                        addModifiers(KModifier.OPEN)
+                                        addParameter("parent", ClassName(packageName, name.nameForNode))
+                                        returns(Int::class)
+                                        addStatement(
+                                            "return %L",
+                                            when (refType) {
+                                                NULLABLE -> "random.nextInt(2)"
+                                                ONE_OR_MORE -> "random.nextInt(${AbstractGenerator::DEFAULT_MAX_SIZE.name}) + 1"
+                                                ZERO_OR_MORE -> "random.nextInt(-1, ${AbstractGenerator::DEFAULT_MAX_SIZE.name}) + 1"
+                                                else -> throw NoWhenBranchMatchedException()
+                                            }
+                                        )
+                                    }.build()
+                                )
                             }
-                            indentCount--
-                            +!"}"
                         }
                     }
                 }
-            }
-            editorFoldOf("new node functions") {
-                for ((name, _) in def.statementsMap) {
-                    +!"open fun ${name.nameForNewNodeFunction}(): ${name.nameForNode} {"
-                    +!"    return ${name.nameForDefaultNode}()"
-                    +!"}"
+                editorFoldOf("new node functions") {
+                    for ((name, _) in def.statementsMap) {
+                        this@type.addFunction(
+                            FunSpec.builder(name.nameForNewNodeFunction).apply {
+                                addModifiers(KModifier.OPEN)
+                                returns(ClassName(packageName, name.nameForNode))
+                                addStatement("return ${name.nameForDefaultNode}()")
+                            }.build()
+                        )
+                    }
                 }
-            }
-            editorFoldOf("generate functions") {
-                for ((name, stat) in def.statementsMap) {
-                    +"open fun ${name.nameForGenFunction}("
-                    val hasParent = def.parentMap[name] != null
-                    if (hasParent && name !in noParentNodeNames) {
-                        +"parent: ${name.nameForParent}"
-                    }
-                    +!"): ${INode::class.simpleName} {"
-                    indentCount++
-                    +"val chooseRef = ${name.nameForChooseReferenceFunction}("
-                    if (hasParent && name !in noParentNodeNames) {
-                        +"parent"
-                    }
-                    +!")"
-                    +!"if (chooseRef != null) return chooseRef"
-                    +!"val result = ${name.nameForNewNodeFunction}()"
-                    if (name !in noCacheNodeNames) {
-                        +!"${name.nameForGeneratedNodesProperty}.add(result)"
-                    }
-                    if (hasParent && name !in noParentNodeNames) {
-                        +!"result.${ITreeChild::parent.name} = parent"
-                    }
-
-                    fun writeGenChildrenCode(refList: ReferenceList) {
-                        for (ref in refList) {
-                            val refName = ref.name
-                            val argument = if (refName in noParentNodeNames) "" else "result"
-                            when (ref.type) {
-                                NON_NULL -> +!"result.addChild(${refName.nameForGenFunction}($argument))"
-                                else -> {
-                                    +!"repeat(${nameForChooseSizeFunction(name, refName)}(result)) {"
-                                    +!"    result.addChild(${refName.nameForGenFunction}($argument))"
-                                    +!"}"
+                editorFoldOf("generate functions") {
+                    for ((name, stat) in def.statementsMap) {
+                        this@type.addFunction(
+                            FunSpec.builder(name.nameForGenFunction).apply {
+                                addModifiers(KModifier.OPEN)
+                                val hasParent = def.parentMap[name] != null
+                                if (hasParent && name !in noParentNodeNames) {
+                                    addParameter("parent", ClassName(packageName, name.nameForParent))
                                 }
-                            }
-                        }
-                    }
+                                returns(INode::class)
+                                addStatement(
+                                    "val chooseRef = %L(%L)",
+                                    name.nameForChooseReferenceFunction,
+                                    if (hasParent && name !in noParentNodeNames) {
+                                        "parent"
+                                    } else ""
+                                )
+                                beginControlFlow("if (chooseRef != null)")
+                                addStatement("return chooseRef")
+                                endControlFlow()
+                                addStatement("val result = ${name.nameForNewNodeFunction}()")
+                                if (name !in noCacheNodeNames) {
+                                    addStatement("${name.nameForGeneratedNodesProperty}.add(result)")
+                                }
+                                if (hasParent && name !in noParentNodeNames) {
+                                    addStatement("result.${ITreeChild::parent.name} = parent")
+                                }
 
-                    if (stat.contents.size > 1) {
-                        +"when (val index = ${name.nameForChooseIndexFunction}("
-                        if (hasParent) {
-                            +"parent"
-                        }
-                        +!")) {"
-                        indentCount++
+                                fun writeGenChildrenCode(refList: ReferenceList) {
+                                    for (ref in refList) {
+                                        val refName = ref.name
+                                        val argument = if (refName in noParentNodeNames) "" else "result"
+                                        when (ref.type) {
+                                            NON_NULL -> addStatement("result.addChild(${refName.nameForGenFunction}($argument))")
+                                            else -> {
+                                                addStatement(
+                                                    "repeat(${
+                                                        nameForChooseSizeFunction(
+                                                            name,
+                                                            refName
+                                                        )
+                                                    }(result)) {"
+                                                )
+                                                addStatement("    result.addChild(${refName.nameForGenFunction}($argument))")
+                                                addStatement("}")
+                                            }
+                                        }
+                                    }
+                                }
 
-                        for ((i, refList) in stat.contents.withIndex()) {
-                            +!"$i -> {"
-                            indentCount++
-                            writeGenChildrenCode(refList)
-                            indentCount--
-                            +!"}"
-                        }
-                        +"else -> throw ${IllegalArgumentException::class.qualifiedName!!}(\""
-                        +"Index: ${'$'}index returned from ${name.nameForChooseIndexFunction} is illegal."
-                        +!"\")"
-                        indentCount--
-                        +!"}"
-                    } else if (stat.contents.size == 1) {
-                        writeGenChildrenCode(stat.contents.single())
+
+                                if (stat.contents.size > 1) {
+                                    beginControlFlow(
+                                        "when (val index = ${name.nameForChooseIndexFunction}(%L))",
+                                        if (hasParent) {
+                                            "parent"
+                                        } else ""
+                                    )
+
+                                    for ((i, refList) in stat.contents.withIndex()) {
+                                        addStatement("$i -> {")
+                                        writeGenChildrenCode(refList)
+                                        addStatement("}")
+                                    }
+                                    addStatement(
+                                        "else -> throw ${IllegalArgumentException::class.qualifiedName!!}(\"" +
+                                                "Index: ${'$'}index returned from ${name.nameForChooseIndexFunction} is illegal." +
+                                                "\")"
+                                    )
+                                    endControlFlow()
+                                } else if (stat.contents.size == 1) {
+                                    writeGenChildrenCode(stat.contents.single())
+                                }
+                                addStatement("return result")
+                            }.build()
+                        )
                     }
-                    +!"return result"
-                    indentCount--
-                    +!"}"
                 }
-            }
-            indentCount--
-            +!"}"
+            }.build()
+            addType(type)
         }
     }
 
@@ -426,210 +483,233 @@ class DefinitionProcessor(
         containingFile: KSFile,
         packageName: String,
         name: String,
-        block: PrintWriterWrapper.() -> Unit
+        block: FileSpec.Builder.() -> Unit
     ) {
-        val stream = codeGen.createNewFile(
-            Dependencies(false, containingFile),
-            packageName,
-            name
-        )
-        PrintWriterWrapper(PrintWriter(OutputStreamWriter(stream))).use { writer ->
-            writer.block()
-        }
+        FileSpec.builder(packageName, name).apply(block)
+            .build().writeTo(codeGen, Dependencies(false, containingFile))
     }
 
-    private fun PrintWriterWrapper.newClassForStatement(
+    private fun FileSpec.Builder.newClassForStatement(
         declValName: DeclValName,
         name: String,
         reference: List<ReferenceList>,
         parents: Set<String>
     ) {
 
-        fun genContentPropertiesAndAddChildFunction(refList: ReferenceList, impl: Boolean = false) {
+        fun TypeSpec.Builder.genContentPropertiesAndAddChildFunction(refList: ReferenceList, impl: Boolean = false) {
             for (ref in refList) {
-                if (impl) {
-                    +"override "
-                    if (ref.type == NON_NULL) {
-                        +"lateinit "
-                    }
-                }
-                +"var ${ref.name.nameForChildProperty(ref.type.canBeMulti())}: "
                 val nodeName = ref.name.nameForNode
-                +when (ref.type) {
-                    NON_NULL -> nodeName
-                    NULLABLE -> "${nodeName}?${if (impl) " = null" else ""}"
-                    ONE_OR_MORE, ZERO_OR_MORE -> "MutableList<${nodeName}> ${if (impl) "= mutableListOf()" else ""}"
+                val nodeClassName = ClassName(packageName, nodeName)
+                val propertyType = when (ref.type) {
+                    NON_NULL -> nodeClassName
+                    NULLABLE -> nodeClassName.copy(nullable = true)
+                    ONE_OR_MORE, ZERO_OR_MORE -> ClassName("kotlin.collections", "MutableList").parameterizedBy(
+                        nodeClassName
+                    )
                 }
-                +!""
+                addProperty(
+                    PropertySpec.builder(ref.name.nameForChildProperty(ref.type.canBeMulti()), propertyType)
+                        .apply propertySpec@{
+                            when (ref.type) {
+                                NON_NULL, NULLABLE -> mutable()
+                                else -> {} // do nothing
+                            }
+                            if (impl) {
+                                addModifiers(KModifier.OVERRIDE)
+                                if (ref.type == NON_NULL) {
+                                    addModifiers(KModifier.LATEINIT)
+                                }
+                                val initCode = when (ref.type) {
+                                    NULLABLE -> "null"
+                                    ONE_OR_MORE, ZERO_OR_MORE -> "mutableListOf()"
+                                    else -> return@propertySpec
+                                }
+                                initializer(CodeBlock.builder().apply {
+                                    addStatement(initCode)
+                                }.build())
+                            }
+                        }.build()
+                )
             }
-            +!"override fun ${ITreeParent::addChild.name}(node: INode) {"
-            indentCount++
-            +!"when (node) {"
-            indentCount++
-            for (ref in refList) {
-                +"is ${ref.name.nameForNode} -> "
-                +!when (ref.type) {
-                    NON_NULL, NULLABLE -> "${ref.name.nameForChildProperty(false)} = node"
-                    ONE_OR_MORE, ZERO_OR_MORE -> "${ref.name.nameForChildProperty(true)}.add(node)"
-                }
-            }
-            +!"else -> {} // currently do nothing"
-            indentCount--
-            +!"}"
-            //
-            +!"${ITreeParent::children.name}.add(node)"
-            indentCount--
-            +!"}"
+            addFunction(
+                FunSpec.builder(ITreeParent::addChild.name).apply {
+                    addModifiers(KModifier.OVERRIDE)
+                    addParameter("node", INode::class)
+                    addCode(CodeBlock.builder().apply {
+                        beginControlFlow("when (node)")
+                        for (ref in refList) {
+                            addStatement(
+                                "is ${ref.name.nameForNode} -> %L",
+                                when (ref.type) {
+                                    NON_NULL, NULLABLE -> "${ref.name.nameForChildProperty(false)} = node"
+                                    ONE_OR_MORE, ZERO_OR_MORE -> "${ref.name.nameForChildProperty(true)}.add(node)"
+                                }
+                            )
+                        }
+                        addStatement("else -> {} // currently do nothing")
+                        endControlFlow()
+                        addStatement("${ITreeParent::children.name}.add(node)")
+                    }.build())
+                }.build()
+            )
         }
 
-        +"interface ${name.nameForNode} : ${INode::class.simpleName}"
-        if (reference.isNotEmpty()) {
-            // extends Parent interfaces
-            +", ${ITreeParent::class.simpleName}, "
-            +(", " join reference.flatMap {
-                it.references.mapNotNull { it1 ->
-                    val it1Name = it1.name
-                    if (it1Name !in noParentNodeNames)
-                        it1Name.nameForParent
-                    else null
+        addType(
+            TypeSpec.interfaceBuilder(name.nameForNode).apply {
+                addSuperinterface(INode::class)
+                if (reference.isNotEmpty()) {
+                    addSuperinterface(ITreeParent::class)
                 }
-            }.toSet())
-        }
-        if (parents.isNotEmpty() && name !in noParentNodeNames) {
-            +", ${ITreeChild::class.simpleName}, "
-            // current node is a child of parent
-            +(", " join parents.map { it.nameForChild })
-        }
-        +!" {"
-        indentCount++
-        if (reference.size == 1) {
-            genContentPropertiesAndAddChildFunction(reference.single())
-        }
-        +!"override fun <D, R> accept(visitor: IVisitor<D, R>, data: D): R {"
-        indentCount++
-        val castForUserDefinedImplNode = if (name in implNodeMap) {
-            " && this is ${name.nameForImpl}"
-        } else ""
-        +!"if (visitor is ${declValName.visitorClassName}<D, R>$castForUserDefinedImplNode) {"
-        +!"    return visitor.${name.nameForVisitFunction}(this, data)"
-        +!"}"
-        +!"return super<INode>.accept(visitor, data)"
-        indentCount--
-        +!"}"
-        indentCount--
-        +!"}\n"
+                for (refList in reference) {
+                    for (ref in refList) {
+                        val refName = ref.name
+                        if (refName !in noParentNodeNames) {
+                            addSuperinterface(ClassName(packageName, refName.nameForParent))
+                        }
+                    }
+                }
+                if (parents.isNotEmpty() && name !in noParentNodeNames) {
+                    addSuperinterface(ITreeChild::class)
+                    for (parent in parents) {
+                        addSuperinterface(ClassName(packageName, parent.nameForChild))
+                    }
+                }
+                if (reference.size == 1) {
+                    genContentPropertiesAndAddChildFunction(reference.single())
+                }
+                addFunction(FunSpec.builder("accept").apply {
+                    addModifiers(KModifier.OVERRIDE)
+                    val d = TypeVariableName("D")
+                    val r = TypeVariableName("R")
+                    addTypeVariables(listOf(d, r))
+                    addParameter(
+                        "visitor",
+                        IVisitor::class.asClassName().parameterizedBy(d, r)
+                    )
+                    addParameter("data", d)
+                    returns(r)
+                    val castForUserDefinedImplNode = if (name in implNodeMap) {
+                        " && this is ${name.nameForImpl}"
+                    } else ""
+                    beginControlFlow("if (visitor is ${declValName.visitorClassName}<D, R>$castForUserDefinedImplNode)")
+                    addStatement("return visitor.${name.nameForVisitFunction}(this, data)")
+                    endControlFlow()
+                    addStatement("return super<INode>.accept(visitor, data)")
+                }.build())
+            }.build()
+        )
 
         if (reference.isNotEmpty()) {
             // child node will extend I{current node name}Child
-            +!"sealed interface ${name.nameForChild} : ${INode::class.simpleName}\n"
+            addType(
+                TypeSpec.interfaceBuilder(name.nameForChild)
+                    .addModifiers(KModifier.SEALED)
+                    .addSuperinterface(INode::class)
+                    .build()
+            )
         }
 
         if (parents.isNotEmpty() && name !in noParentNodeNames) {
-            +!"sealed interface ${name.nameForParent} : ${INode::class.simpleName}"
+            addType(
+                TypeSpec.interfaceBuilder(name.nameForParent)
+                    .addModifiers(KModifier.SEALED)
+                    .addSuperinterface(INode::class)
+                    .build()
+            )
         }
 
         if (reference.isEmpty()) {
-            +!"open class ${name.nameForDefaultNode} : ${name.nameForNode} {"
-            if (parents.isNotEmpty() && name !in noParentNodeNames) {
-                +!"    override lateinit var ${ITreeChild::parent.name}: ${INode::class.simpleName}"
-            }
-            if (reference.isNotEmpty()) {
-                +!"    override val ${ITreeParent::children.name}: MutableList<INode> = mutableListOf()"
-            }
-            +!"}"
+            addType(
+                TypeSpec.classBuilder(name.nameForDefaultNode).apply {
+                    addModifiers(KModifier.OPEN)
+                    addSuperinterface(ClassName(packageName, name.nameForNode))
+                    if (parents.isNotEmpty() && name !in noParentNodeNames) {
+                        addProperty(
+                            PropertySpec.builder(ITreeChild::parent.name, INode::class)
+                                .mutable()
+                                .addModifiers(KModifier.OVERRIDE)
+                                .addModifiers(KModifier.LATEINIT)
+                                .build()
+                        )
+                    }
+                    if (reference.isNotEmpty()) {
+                        addProperty(
+                            PropertySpec.builder(
+                                ITreeParent::children.name,
+                                ClassName(
+                                    "kotlin.collections",
+                                    "MutableList"
+                                ).parameterizedBy(INode::class.asClassName())
+                            ).apply {
+                                addModifiers(KModifier.OVERRIDE)
+                                addModifiers(KModifier.LATEINIT)
+                                initializer("mutableListOf()")
+                            }.build()
+                        )
+                    }
+                }.build()
+            )
         } else if (reference.size > 1) {
-            +!"open class ${name.nameForDefaultNode} : ${name.nameForDefaultNode}0()"
+            addType(
+                TypeSpec.classBuilder(name.nameForDefaultNode).apply {
+                    addModifiers(KModifier.OPEN)
+                    superclass(ClassName(packageName, "${name.nameForDefaultNode}0"))
+                }.build()
+            )
         }
         for ((i, refList) in reference.withIndex()) {
-            +"open class ${name.nameForDefaultNode}"
+            val numberStr = if (reference.size > 1) {
+                "$i"
+            } else ""
+            addType(
+                TypeSpec.classBuilder("""${name.nameForDefaultNode}$numberStr""").apply {
+                    addModifiers(KModifier.OPEN)
+                    addSuperinterface(ClassName(packageName, "${name.nameForNode}$numberStr"))
+                    if (parents.isNotEmpty() && name !in noParentNodeNames) {
+                        addProperty(
+                            PropertySpec.builder(ITreeChild::parent.name, INode::class)
+                                .mutable()
+                                .addModifiers(KModifier.OVERRIDE)
+                                .addModifiers(KModifier.LATEINIT)
+                                .build()
+                        )
+                    }
+                    if (reference.isNotEmpty()) {
+                        addProperty(
+                            PropertySpec.builder(
+                                ITreeParent::children.name,
+                                ClassName(
+                                    "kotlin.collections",
+                                    "MutableList"
+                                ).parameterizedBy(INode::class.asClassName())
+                            ).addModifiers(KModifier.OVERRIDE)
+                                .initializer("mutableListOf()")
+                                .build()
+                        )
+                    }
+                    genContentPropertiesAndAddChildFunction(refList, true)
+                }.build()
+            )
             if (reference.size > 1) {
-                +"$i"
-            }
-            +" : ${name.nameForNode}"
-            if (reference.size > 1) {
-                +"$i"
-            }
-            +!" {"
-            indentCount++
-            if (parents.isNotEmpty() && name !in noParentNodeNames) {
-                +!"override lateinit var ${ITreeChild::parent.name}: ${INode::class.simpleName}"
-            }
-            if (reference.isNotEmpty()) {
-                +!"override val ${ITreeParent::children.name}: MutableList<INode> = mutableListOf()"
-            }
-            genContentPropertiesAndAddChildFunction(refList, true)
-            indentCount--
-            +!"}"
-            if (reference.size > 1) {
-                +!"interface ${name.nameForNode}${i} : ${name.nameForNode} {"
-                indentCount++
-                genContentPropertiesAndAddChildFunction(refList)
-                indentCount--
-                +!"}"
+                addType(
+                    TypeSpec.interfaceBuilder("${name.nameForNode}${i}").apply {
+                        addSuperinterface(ClassName(packageName, name.nameForNode))
+                        genContentPropertiesAndAddChildFunction(refList)
+                    }.build()
+                )
             }
         }
-    }
-
-    private fun PrintWriterWrapper.writeClassHead(packageName: String) {
-        +!"@file:Suppress(\"unused\", \"ClassName\", \"RemoveEmptyClassBody\", \"PropertyName\")"
-        +!""
-        +!"package $packageName"
-        +!""
-        +!"import ${INode::class.qualifiedName!!}"
-        +!"import ${IRef::class.qualifiedName!!}"
-        +!"import ${ITreeParent::class.qualifiedName!!}"
-        +!"import ${ITreeChild::class.qualifiedName!!}"
-        +!"import ${IVisitor::class.qualifiedName!!}"
-        +!"import ${RefNode::class.qualifiedName!!}"
-        +!"import ${AbstractGenerator::class.qualifiedName!!}"
-        +!""
     }
 
     companion object {
         const val NAME_GENERATED = "generated"
     }
 
-    private class PrintWriterWrapper(private val printer: PrintWriter) : Closeable by printer {
-        var indentCount = 0
-
-        /**
-         * true if the printer just ready to start a new line.
-         */
-        var newLine = true
-
-        @JvmInline
-        value class StringAndNewLine(val str: String)
-
-        inline fun editorFoldOf(foldName: String, block: PrintWriterWrapper.() -> Unit) {
-            +!"//<editor-fold desc=\"${foldName}\">"
-            block()
-            +!"//</editor-fold>"
-        }
-
-        operator fun String.not(): StringAndNewLine {
-            return StringAndNewLine(this)
-        }
-
-        operator fun String.unaryPlus() {
-            if (newLine) {
-                printer.print("    ".repeat(indentCount))
-                newLine = false
-            }
-            printer.print(this)
-        }
-
-        operator fun StringAndNewLine.unaryPlus() {
-            if (newLine) {
-                printer.print("    ".repeat(indentCount))
-                newLine = false
-            }
-            printer.println(this.str)
-            newLine = true
-        }
-
-        infix fun <T> String.join(iter: Iterable<T>): String {
-            return iter.joinToString(this)
-        }
+    fun FileSpec.Builder.editorFoldOf(foldName: String, block: FileSpec.Builder.() -> Unit) {
+        addFileComment("<editor-fold desc=\"${foldName}\">")
+        block()
+        addFileComment("</editor-fold>")
     }
+
 }
 
