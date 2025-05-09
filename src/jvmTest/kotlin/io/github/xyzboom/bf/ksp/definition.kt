@@ -5,48 +5,51 @@ import io.github.xyzboom.bf.def.DefImplPair
 import io.github.xyzboom.bf.def.DefinitionDecl
 
 @DefinitionDecl(
-    def,
+    crossLangFuzzerDef,
     extra = DefExtra(
         noParentNames = [
             "classKind",
             "declName",
+            "typeParamName",
             "lang",
         ],
         noCacheNames = [
             "classKind",
             "declName",
+            "typeParamName",
             "lang",
         ],
         implNames = [
-            DefImplPair("prog", IrProgram::class)
+            DefImplPair("prog", IrProgram::class),
         ]
     )
 )
-const val def = """
+const val crossLangFuzzerDef = """
 // declaration
 prog: topDecl+;
 topDecl: _topDecl lang;
 lang;
 _topDecl: class | field | func;
-    
-class: classKind declName typeParam superType? superIntfList memberDecl+;
+
+class: classKind declName typeParam* superType? superIntfList memberDecl+;
 classKind;
 superIntfList: superType*;
-    
+
 memberDecl: memberMethod; // others todo
 memberMethod: declName param* type override*;
-    
+
 // override
 override: memberMethod;
-    
+
 param: declName type;
-    
+
 type: typeParam | superType;
-    
+typeParam: typeParamName;
+
 superType: class typeArg*;
 // leaf
 declName;
-typeParam;
+typeParamName;
 typeArg;
 field; // todo
 func; // todo

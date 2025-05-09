@@ -59,7 +59,7 @@ class DefinitionProcessor(
     private val String.nameForParent
         get(): String {
             require(this !in noParentNodeNames)
-            return "I${uppercaseFirstChar()}Parent"
+            return "IParentOf${uppercaseFirstChar()}"
         }
 
     private val String.nameForNode
@@ -78,7 +78,7 @@ class DefinitionProcessor(
 
     private val String.nameForChild
         get(): String {
-            return "I${uppercaseFirstChar()}Child"
+            return "IChildOf${uppercaseFirstChar()}"
         }
 
     private val String.nameForDefaultNode
@@ -94,6 +94,11 @@ class DefinitionProcessor(
     private val String.nameForGenFunction
         get(): String {
             return "generate${uppercaseFirstChar()}"
+        }
+
+    private val String.nameForParentProperty: String
+        get(): String {
+            return "${lowercaseFirstChar()}Parent"
         }
 
     private fun String.nameForChildProperty(multi: Boolean): String {
@@ -189,7 +194,7 @@ class DefinitionProcessor(
         val declValName = DeclValName(defDecl.simpleName.asString())
         newFile(containingFile, packageName, "${declValName.value}Nodes") {
             for ((name, stat) in def.statementsMap) {
-                newClassForStatement(declValName, name, stat.contents, def.parentMap[name] ?: emptySet())
+                newClassForStatement(declValName, name, stat.contents, def.parentMap[name] ?: emptyMap())
             }
         }
         createGeneratorClass(containingFile, packageName, declValName, def)
@@ -493,14 +498,15 @@ class DefinitionProcessor(
         declValName: DeclValName,
         name: String,
         reference: List<ReferenceList>,
-        parents: Set<String>
+        parents: Map<String, RefType>
     ) {
 
-        fun TypeSpec.Builder.genContentPropertiesAndAddChildFunction(refList: ReferenceList, impl: Boolean = false) {
+        fun TypeSpec.Builder.genChildPropertiesAndAddChildFunction(refList: ReferenceList, impl: Boolean = false) {
             for (ref in refList) {
-                val nodeName = ref.name.nameForNode
+                val refName = ref.name
+                val nodeName = refName.nameForNode
                 val nodeClassName = ClassName(packageName, nodeName)
-                val propertyType = when (ref.type) {
+                val childPropertyType = when (ref.type) {
                     NON_NULL -> nodeClassName
                     NULLABLE -> nodeClassName.copy(nullable = true)
                     ONE_OR_MORE, ZERO_OR_MORE -> ClassName("kotlin.collections", "MutableList").parameterizedBy(
@@ -508,7 +514,7 @@ class DefinitionProcessor(
                     )
                 }
                 addProperty(
-                    PropertySpec.builder(ref.name.nameForChildProperty(ref.type.canBeMulti()), propertyType)
+                    PropertySpec.builder(refName.nameForChildProperty(ref.type.canBeMulti()), childPropertyType)
                         .apply propertySpec@{
                             when (ref.type) {
                                 NON_NULL, NULLABLE -> mutable()
@@ -554,6 +560,20 @@ class DefinitionProcessor(
             )
         }
 
+        fun TypeSpec.Builder.genParentProperties(): TypeSpec.Builder {
+            if (name in noParentNodeNames) return this
+            for ((parent, _) in parents) {
+                addProperty(
+                    PropertySpec.builder(
+                        parent.nameForParentProperty,
+                        ClassName(packageName, parent.nameForNode),
+                        KModifier.OVERRIDE, KModifier.LATEINIT
+                    ).mutable().build()
+                )
+            }
+            return this
+        }
+
         addType(
             TypeSpec.interfaceBuilder(name.nameForNode).apply {
                 addSuperinterface(INode::class)
@@ -570,12 +590,12 @@ class DefinitionProcessor(
                 }
                 if (parents.isNotEmpty() && name !in noParentNodeNames) {
                     addSuperinterface(ITreeChild::class)
-                    for (parent in parents) {
+                    for ((parent, _) in parents) {
                         addSuperinterface(ClassName(packageName, parent.nameForChild))
                     }
                 }
                 if (reference.size == 1) {
-                    genContentPropertiesAndAddChildFunction(reference.single())
+                    genChildPropertiesAndAddChildFunction(reference.single())
                 }
                 addFunction(FunSpec.builder("accept").apply {
                     addModifiers(KModifier.OVERRIDE)
@@ -605,7 +625,11 @@ class DefinitionProcessor(
                 TypeSpec.interfaceBuilder(name.nameForChild)
                     .addModifiers(KModifier.SEALED)
                     .addSuperinterface(INode::class)
-                    .build()
+                    .addProperty(
+                        PropertySpec.builder(
+                            name.nameForParentProperty, ClassName(packageName, name.nameForNode)
+                        ).mutable().build()
+                    ).build()
             )
         }
 
@@ -632,21 +656,7 @@ class DefinitionProcessor(
                                 .build()
                         )
                     }
-                    if (reference.isNotEmpty()) {
-                        addProperty(
-                            PropertySpec.builder(
-                                ITreeParent::children.name,
-                                ClassName(
-                                    "kotlin.collections",
-                                    "MutableList"
-                                ).parameterizedBy(INode::class.asClassName())
-                            ).apply {
-                                addModifiers(KModifier.OVERRIDE)
-                                addModifiers(KModifier.LATEINIT)
-                                initializer("mutableListOf()")
-                            }.build()
-                        )
-                    }
+                    genParentProperties()
                 }.build()
             )
         } else if (reference.size > 1) {
@@ -674,27 +684,27 @@ class DefinitionProcessor(
                                 .build()
                         )
                     }
-                    if (reference.isNotEmpty()) {
-                        addProperty(
-                            PropertySpec.builder(
-                                ITreeParent::children.name,
-                                ClassName(
-                                    "kotlin.collections",
-                                    "MutableList"
-                                ).parameterizedBy(INode::class.asClassName())
-                            ).addModifiers(KModifier.OVERRIDE)
-                                .initializer("mutableListOf()")
-                                .build()
-                        )
-                    }
-                    genContentPropertiesAndAddChildFunction(refList, true)
+                    // if the `for` is entered, that means reference must not be empty.
+                    addProperty(
+                        PropertySpec.builder(
+                            ITreeParent::children.name,
+                            ClassName(
+                                "kotlin.collections",
+                                "MutableList"
+                            ).parameterizedBy(INode::class.asClassName())
+                        ).addModifiers(KModifier.OVERRIDE)
+                            .initializer("mutableListOf()")
+                            .build()
+                    )
+                    genChildPropertiesAndAddChildFunction(refList, true)
+                    genParentProperties()
                 }.build()
             )
             if (reference.size > 1) {
                 addType(
                     TypeSpec.interfaceBuilder("${name.nameForNode}${i}").apply {
                         addSuperinterface(ClassName(packageName, name.nameForNode))
-                        genContentPropertiesAndAddChildFunction(refList)
+                        genChildPropertiesAndAddChildFunction(refList)
                     }.build()
                 )
             }
@@ -706,6 +716,7 @@ class DefinitionProcessor(
     }
 
     fun FileSpec.Builder.editorFoldOf(foldName: String, block: FileSpec.Builder.() -> Unit) {
+        // This does not work, see https://github.com/square/kotlinpoet/issues/1862 for more information
         addFileComment("<editor-fold desc=\"${foldName}\">")
         block()
         addFileComment("</editor-fold>")

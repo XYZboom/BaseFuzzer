@@ -14,14 +14,14 @@ class Definition(
      * key: statement name.
      * value: available context names.
      */
-    val parentMap: Map<String, Set<String>> by lazy { collectContext() }
+    val parentMap: Map<String, Map<String, RefType>> by lazy { collectContext() }
 
-    private fun collectContext(): Map<String, Set<String>> {
-        val result = mutableMapOf<String, MutableSet<String>>()
+    private fun collectContext(): Map<String, Map<String, RefType>> {
+        val result = mutableMapOf<String, MutableMap<String, RefType>>()
         for ((name, stat) in statementsMap) {
             for (refList in stat.contents) {
                 for (ref in refList) {
-                    result.getOrPut(ref.name) { mutableSetOf() }.add(name)
+                    result.getOrPut(ref.name) { mutableMapOf() }.put(name, ref.type)
                 }
             }
         }
