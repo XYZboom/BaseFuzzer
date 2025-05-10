@@ -644,14 +644,26 @@ class DefinitionProcessor(
 
         if (parents.isNotEmpty()) {
             addType(
-                TypeSpec.interfaceBuilder(name.nameForParent)
-                    .addSuperinterface(INode::class)
-                    .addProperty(
+                TypeSpec.interfaceBuilder(name.nameForParent).apply {
+                    addSuperinterface(INode::class)
+                    val valueSet = parents.values.toSet()
+                    val typeClass = if (valueSet.size == 1) {
+                        when (valueSet.single()) {
+                            NON_NULL -> NotNull::class
+                            NULLABLE -> Nullable::class
+                            ONE_OR_MORE -> OneOrMore::class
+                            ZERO_OR_MORE -> ZeroOrMore::class
+                        }
+                    } else {
+                        IChildNode::class
+                    }
+                    addProperty(
                         PropertySpec.builder(
                             name.nameForChildProperty,
-                            IChildNode::class.asClassName().parameterizedBy(ClassName(packageName, name.nameForNode))
+                            typeClass.asClassName().parameterizedBy(ClassName(packageName, name.nameForNode))
                         ).build()
-                    ).build()
+                    )
+                }.build()
             )
         }
 
