@@ -58,7 +58,6 @@ class DefinitionProcessor(
     //<editor-fold desc="Names">
     private val String.nameForParent
         get(): String {
-            require(this !in noParentNodeNames)
             return "IParentOf${uppercaseFirstChar()}"
         }
 
@@ -101,9 +100,10 @@ class DefinitionProcessor(
             return "${lowercaseFirstChar()}Parent"
         }
 
-    private fun String.nameForChildProperty(multi: Boolean): String {
-        return "${lowercaseFirstChar()}Child${if (multi) "ren" else ""}"
-    }
+    private val String.nameForChildProperty: String
+        get(): String {
+            return "${lowercaseFirstChar()}Child"
+        }
 
     private val String.nameForChooseIndexFunction
         get(): String {
@@ -403,80 +403,87 @@ class DefinitionProcessor(
                 }
                 editorFoldOf("generate functions") {
                     for ((name, stat) in def.statementsMap) {
-                        this@type.addFunction(
-                            FunSpec.builder(name.nameForGenFunction).apply {
-                                addModifiers(KModifier.OPEN)
-                                val hasParent = def.parentMap[name] != null
-                                if (hasParent && name !in noParentNodeNames) {
-                                    addParameter("parent", ClassName(packageName, name.nameForParent))
+
+                        fun FunSpec.Builder.writeGenChildrenCode(
+                            refList: ReferenceList,
+                            cast: Boolean = false,
+                            index: Int = 0
+                        ) {
+                            for (ref in refList) {
+                                val refName = ref.name
+                                val argument = if (refName in noParentNodeNames) {
+                                    ""
+                                } else if (cast) {
+                                    "result as ${name.nameForNode}$index"
+                                } else "result"
+                                when (ref.type) {
+                                    NON_NULL -> addStatement("result.addChild(${refName.nameForGenFunction}($argument))")
+                                    else -> {
+                                        addStatement(
+                                            "repeat(${
+                                                nameForChooseSizeFunction(
+                                                    name,
+                                                    refName
+                                                )
+                                            }(result)) {"
+                                        )
+                                        addStatement("    result.addChild(${refName.nameForGenFunction}($argument))")
+                                        addStatement("}")
+                                    }
                                 }
-                                returns(INode::class)
-                                addStatement(
-                                    "val chooseRef = %L(%L)",
-                                    name.nameForChooseReferenceFunction,
-                                    if (hasParent && name !in noParentNodeNames) {
+                            }
+                        }
+
+                        val func = FunSpec.builder(name.nameForGenFunction).apply {
+                            addModifiers(KModifier.OPEN)
+                            val hasParent = def.parentMap[name] != null
+                            if (hasParent && name !in noParentNodeNames) {
+                                addParameter("parent", ClassName(packageName, name.nameForParent))
+                            }
+                            returns(INode::class)
+                            addStatement(
+                                "val chooseRef = %L(%L)",
+                                name.nameForChooseReferenceFunction,
+                                if (hasParent && name !in noParentNodeNames) {
+                                    "parent"
+                                } else ""
+                            )
+                            beginControlFlow("if (chooseRef != null)")
+                            addStatement("return chooseRef")
+                            endControlFlow()
+                            addStatement("val result = ${name.nameForNewNodeFunction}()")
+                            if (name !in noCacheNodeNames) {
+                                addStatement("${name.nameForGeneratedNodesProperty}.add(result)")
+                            }
+                            if (hasParent && name !in noParentNodeNames) {
+                                addStatement("result.${ITreeChild::parent.name} = parent")
+                            }
+
+                            if (stat.contents.size > 1) {
+                                beginControlFlow(
+                                    "when (val index = ${name.nameForChooseIndexFunction}(%L))",
+                                    if (hasParent) {
                                         "parent"
                                     } else ""
                                 )
-                                beginControlFlow("if (chooseRef != null)")
-                                addStatement("return chooseRef")
-                                endControlFlow()
-                                addStatement("val result = ${name.nameForNewNodeFunction}()")
-                                if (name !in noCacheNodeNames) {
-                                    addStatement("${name.nameForGeneratedNodesProperty}.add(result)")
-                                }
-                                if (hasParent && name !in noParentNodeNames) {
-                                    addStatement("result.${ITreeChild::parent.name} = parent")
-                                }
 
-                                fun writeGenChildrenCode(refList: ReferenceList) {
-                                    for (ref in refList) {
-                                        val refName = ref.name
-                                        val argument = if (refName in noParentNodeNames) "" else "result"
-                                        when (ref.type) {
-                                            NON_NULL -> addStatement("result.addChild(${refName.nameForGenFunction}($argument))")
-                                            else -> {
-                                                addStatement(
-                                                    "repeat(${
-                                                        nameForChooseSizeFunction(
-                                                            name,
-                                                            refName
-                                                        )
-                                                    }(result)) {"
-                                                )
-                                                addStatement("    result.addChild(${refName.nameForGenFunction}($argument))")
-                                                addStatement("}")
-                                            }
-                                        }
-                                    }
-                                }
-
-
-                                if (stat.contents.size > 1) {
-                                    beginControlFlow(
-                                        "when (val index = ${name.nameForChooseIndexFunction}(%L))",
-                                        if (hasParent) {
-                                            "parent"
-                                        } else ""
-                                    )
-
-                                    for ((i, refList) in stat.contents.withIndex()) {
-                                        addStatement("$i -> {")
-                                        writeGenChildrenCode(refList)
-                                        addStatement("}")
-                                    }
-                                    addStatement(
-                                        "else -> throw ${IllegalArgumentException::class.qualifiedName!!}(\"" +
-                                                "Index: ${'$'}index returned from ${name.nameForChooseIndexFunction} is illegal." +
-                                                "\")"
-                                    )
+                                for ((i, refList) in stat.contents.withIndex()) {
+                                    beginControlFlow("$i ->")
+                                    writeGenChildrenCode(refList, cast = true, index = i)
                                     endControlFlow()
-                                } else if (stat.contents.size == 1) {
-                                    writeGenChildrenCode(stat.contents.single())
                                 }
-                                addStatement("return result")
-                            }.build()
-                        )
+                                addStatement(
+                                    "else -> throw ${IllegalArgumentException::class.qualifiedName!!}(\"" +
+                                            "Index: ${'$'}index returned from ${name.nameForChooseIndexFunction} is illegal." +
+                                            "\")"
+                                )
+                                endControlFlow()
+                            } else if (stat.contents.size == 1) {
+                                writeGenChildrenCode(stat.contents.single())
+                            }
+                            addStatement("return result")
+                        }.build()
+                        this@type.addFunction(func)
                     }
                 }
             }.build()
@@ -501,33 +508,36 @@ class DefinitionProcessor(
         parents: Map<String, RefType>
     ) {
 
-        fun TypeSpec.Builder.genChildPropertiesAndAddChildFunction(refList: ReferenceList, impl: Boolean = false) {
+        fun TypeSpec.Builder.genChildPropertiesAndAddChildFunction(
+            refList: ReferenceList,
+            impl: Boolean = false
+        ) {
             for (ref in refList) {
                 val refName = ref.name
                 val nodeName = refName.nameForNode
                 val nodeClassName = ClassName(packageName, nodeName)
                 val childPropertyType = when (ref.type) {
-                    NON_NULL -> nodeClassName
-                    NULLABLE -> nodeClassName.copy(nullable = true)
-                    ONE_OR_MORE, ZERO_OR_MORE -> ClassName("kotlin.collections", "MutableList").parameterizedBy(
-                        nodeClassName
-                    )
-                }
+                    NON_NULL -> NotNull::class.asClassName()
+                    NULLABLE -> Nullable::class.asClassName()
+                    ONE_OR_MORE -> OneOrMore::class.asClassName()
+                    ZERO_OR_MORE -> ZeroOrMore::class.asClassName()
+                }.parameterizedBy(nodeClassName)
                 addProperty(
-                    PropertySpec.builder(refName.nameForChildProperty(ref.type.canBeMulti()), childPropertyType)
+                    PropertySpec.builder(refName.nameForChildProperty, childPropertyType)
                         .apply propertySpec@{
                             when (ref.type) {
                                 NON_NULL, NULLABLE -> mutable()
                                 else -> {} // do nothing
                             }
+                            addModifiers(KModifier.OVERRIDE)
+                            mutable()
                             if (impl) {
-                                addModifiers(KModifier.OVERRIDE)
-                                if (ref.type == NON_NULL) {
+                                if (ref.type == NON_NULL || ref.type == NULLABLE) {
                                     addModifiers(KModifier.LATEINIT)
                                 }
                                 val initCode = when (ref.type) {
-                                    NULLABLE -> "null"
-                                    ONE_OR_MORE, ZERO_OR_MORE -> "mutableListOf()"
+                                    ONE_OR_MORE -> "${OneOrMore::class.simpleName}()"
+                                    ZERO_OR_MORE -> "${ZeroOrMore::class.simpleName}()"
                                     else -> return@propertySpec
                                 }
                                 initializer(CodeBlock.builder().apply {
@@ -547,8 +557,9 @@ class DefinitionProcessor(
                             addStatement(
                                 "is ${ref.name.nameForNode} -> %L",
                                 when (ref.type) {
-                                    NON_NULL, NULLABLE -> "${ref.name.nameForChildProperty(false)} = node"
-                                    ONE_OR_MORE, ZERO_OR_MORE -> "${ref.name.nameForChildProperty(true)}.add(node)"
+                                    NON_NULL -> "${ref.name.nameForChildProperty} = ${NotNull::class.simpleName}(node)"
+                                    NULLABLE -> "${ref.name.nameForChildProperty} = ${Nullable::class.simpleName}(node)"
+                                    ONE_OR_MORE, ZERO_OR_MORE -> "${ref.name.nameForChildProperty}.add(node)"
                                 }
                             )
                         }
@@ -580,12 +591,11 @@ class DefinitionProcessor(
                 if (reference.isNotEmpty()) {
                     addSuperinterface(ITreeParent::class)
                 }
-                for (refList in reference) {
+                if (reference.size == 1) {
+                    val refList = reference.single()
                     for (ref in refList) {
                         val refName = ref.name
-                        if (refName !in noParentNodeNames) {
-                            addSuperinterface(ClassName(packageName, refName.nameForParent))
-                        }
+                        addSuperinterface(ClassName(packageName, refName.nameForParent))
                     }
                 }
                 if (parents.isNotEmpty() && name !in noParentNodeNames) {
@@ -623,7 +633,6 @@ class DefinitionProcessor(
             // child node will extend I{current node name}Child
             addType(
                 TypeSpec.interfaceBuilder(name.nameForChild)
-                    .addModifiers(KModifier.SEALED)
                     .addSuperinterface(INode::class)
                     .addProperty(
                         PropertySpec.builder(
@@ -633,12 +642,16 @@ class DefinitionProcessor(
             )
         }
 
-        if (parents.isNotEmpty() && name !in noParentNodeNames) {
+        if (parents.isNotEmpty()) {
             addType(
                 TypeSpec.interfaceBuilder(name.nameForParent)
-                    .addModifiers(KModifier.SEALED)
                     .addSuperinterface(INode::class)
-                    .build()
+                    .addProperty(
+                        PropertySpec.builder(
+                            name.nameForChildProperty,
+                            IChildNode::class.asClassName().parameterizedBy(ClassName(packageName, name.nameForNode))
+                        ).build()
+                    ).build()
             )
         }
 
@@ -704,6 +717,10 @@ class DefinitionProcessor(
                 addType(
                     TypeSpec.interfaceBuilder("${name.nameForNode}${i}").apply {
                         addSuperinterface(ClassName(packageName, name.nameForNode))
+                        for (ref in refList) {
+                            val refName = ref.name
+                            addSuperinterface(ClassName(packageName, refName.nameForParent))
+                        }
                         genChildPropertiesAndAddChildFunction(refList)
                     }.build()
                 )
