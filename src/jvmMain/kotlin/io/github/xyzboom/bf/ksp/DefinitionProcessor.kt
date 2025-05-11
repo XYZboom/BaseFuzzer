@@ -571,20 +571,6 @@ class DefinitionProcessor(
             )
         }
 
-        fun TypeSpec.Builder.genParentProperties(): TypeSpec.Builder {
-            if (name in noParentNodeNames) return this
-            for ((parent, _) in parents) {
-                addProperty(
-                    PropertySpec.builder(
-                        parent.nameForParentProperty,
-                        ClassName(packageName, parent.nameForNode),
-                        KModifier.OVERRIDE, KModifier.LATEINIT
-                    ).mutable().build()
-                )
-            }
-            return this
-        }
-
         addType(
             TypeSpec.interfaceBuilder(name.nameForNode).apply {
                 addSuperinterface(INode::class)
@@ -630,14 +616,16 @@ class DefinitionProcessor(
         )
 
         if (reference.isNotEmpty()) {
-            // child node will extend I{current node name}Child
+            val parentPropertyType = ClassName(packageName, name.nameForNode)
             addType(
                 TypeSpec.interfaceBuilder(name.nameForChild)
-                    .addSuperinterface(INode::class)
+                    .addSuperinterface(ITreeChild::class)
                     .addProperty(
                         PropertySpec.builder(
-                            name.nameForParentProperty, ClassName(packageName, name.nameForNode)
-                        ).mutable().build()
+                            name.nameForParentProperty, parentPropertyType
+                        ).getter(
+                            FunSpec.getterBuilder().addStatement("return parent as %T", parentPropertyType).build()
+                        ).build()
                     ).build()
             )
         }
@@ -681,7 +669,6 @@ class DefinitionProcessor(
                                 .build()
                         )
                     }
-                    genParentProperties()
                 }.build()
             )
         } else if (reference.size > 1) {
@@ -722,7 +709,6 @@ class DefinitionProcessor(
                             .build()
                     )
                     genChildPropertiesAndAddChildFunction(refList, true)
-                    genParentProperties()
                 }.build()
             )
             if (reference.size > 1) {
