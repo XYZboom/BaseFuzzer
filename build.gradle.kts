@@ -76,7 +76,7 @@ kotlin {
     sourceSets {
         commonMain {
             dependencies {
-                implementation(libs.kotlin.logging)
+                api(libs.kotlin.logging)
                 implementation(libs.kaml)
                 implementation(libs.okio)
                 implementation(libs.antlr.kotlin)
@@ -111,6 +111,7 @@ kotlin {
         }
         all {
             languageSettings.enableLanguageFeature("WhenGuards")
+            languageSettings.enableLanguageFeature("ContextParameters")
         }
     }
 }

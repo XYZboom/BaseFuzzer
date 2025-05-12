@@ -20,6 +20,8 @@ import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.parameterizedBy
 import com.squareup.kotlinpoet.TypeVariableName
 import com.squareup.kotlinpoet.asClassName
 import com.squareup.kotlinpoet.ksp.writeTo
+import io.github.oshai.kotlinlogging.KLogger
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlin.reflect.KClass
 
 class DefinitionProcessor(
@@ -284,6 +286,41 @@ class DefinitionProcessor(
         }
     }
 
+    @JvmInline
+    private value class FuncName(val value: String)
+
+    context(name: FuncName)
+    private fun FunSpec.Builder.genLogExit() {
+        addStatement("logger.trace { %S }", "exit ${name.value}")
+    }
+
+    context(wrapper: FuncName)
+    private fun FunSpec.Builder.genLogTrace(content: String) {
+        addStatement("logger.trace { %S }", content)
+    }
+
+    context(wrapper: FuncName)
+    private fun FunSpec.Builder.genLogTrace(block: context(FuncName) FunSpec.Builder.() -> Unit) {
+        beginControlFlow("logger.trace")
+        block()
+        endControlFlow()
+    }
+
+    private fun TypeSpec.Builder.funcWithLog(
+        name: String,
+        block: context(FuncName) FunSpec.Builder.() -> Unit
+    ) {
+        val funcBuilder = FunSpec.builder(name)
+        val funcName = FuncName(name)
+        val func = with(funcName) {
+            funcBuilder.apply {
+                addStatement("logger.trace { %S }", "enter $name")
+                block()
+            }.build()
+        }
+        addFunction(func)
+    }
+
     private fun createGeneratorClass(
         containingFile: KSFile,
         packageName: String,
@@ -295,6 +332,21 @@ class DefinitionProcessor(
             val type = TypeSpec.classBuilder(generatorName).apply type@{
                 addModifiers(KModifier.OPEN)
                 superclass(AbstractGenerator::class)
+                addProperty(
+                    PropertySpec.builder("logger", KLogger::class, KModifier.PRIVATE)
+                        .initializer(
+                            "%T.logger {}",
+                            KotlinLogging::class,
+                        ).build()
+                )
+                addFunction(
+                    FunSpec.builder("render")
+                        .addModifiers(KModifier.OPEN)
+                        .returns(String::class)
+                        .addParameter("node", INode::class)
+                        .addStatement("return node.toString()")
+                        .build()
+                )
                 editorFoldOf("generated nodes") {
                     for ((name, _) in def.statementsMap) {
                         if (name !in noCacheNodeNames) {
@@ -307,55 +359,60 @@ class DefinitionProcessor(
                             )
                         }
                     }
-                    this@type.addFunction(
-                        FunSpec.builder("clearGeneratedNodes").apply {
-                            addModifiers(KModifier.OPEN)
-                            for ((name, _) in def.statementsMap) {
-                                if (name !in noCacheNodeNames) {
-                                    addStatement("${name.nameForGeneratedNodesProperty}.clear()")
-                                }
+                    funcWithLog("clearGeneratedNodes") {
+                        addModifiers(KModifier.OPEN)
+                        for ((name, _) in def.statementsMap) {
+                            if (name !in noCacheNodeNames) {
+                                addStatement("${name.nameForGeneratedNodesProperty}.clear()")
                             }
-                        }.build()
-                    )
+                        }
+                        genLogExit()
+                    }
                 }
                 editorFoldOf("choose reference") {
                     for ((name, _) in def.statementsMap) {
-                        this@type.addFunction(
-                            FunSpec.builder(name.nameForChooseReferenceFunction).apply {
-                                addModifiers(KModifier.OPEN)
-                                if (def.parentMap[name] != null && name !in noParentNodeNames) {
-                                    addParameter("parent", ClassName(packageName, name.nameForParent))
+                        funcWithLog(name.nameForChooseReferenceFunction) {
+                            addModifiers(KModifier.OPEN)
+                            if (def.parentMap[name] != null && name !in noParentNodeNames) {
+                                addParameter("parent", ClassName(packageName, name.nameForParent))
+                            }
+                            val returnType = IRef::class.asClassName().copy(nullable = true)
+                            returns(returnType)
+                            if (name !in noCacheNodeNames) {
+                                beginControlFlow("if (random.nextBoolean())")
+                                genLogTrace("no reference was chosen for $name")
+                                genLogExit()
+                                addStatement("return null")
+                                nextControlFlow("else")
+                                addStatement(
+                                    "val result = %T(${name.nameForGeneratedNodesProperty}.random(random))",
+                                    RefNode::class
+                                )
+                                genLogTrace {
+                                    addStatement("%P", "Chosen reference for $name: ${'$'}{render(result)}")
                                 }
-                                returns(IRef::class.asClassName().copy(nullable = true))
-                                if (name !in noCacheNodeNames) {
-                                    beginControlFlow("if (random.nextBoolean())")
-                                    addStatement("return null")
-                                    nextControlFlow("else")
-                                    addStatement(
-                                        "return %T(${name.nameForGeneratedNodesProperty}.random(random))",
-                                        RefNode::class
-                                    )
-                                    endControlFlow()
-                                } else {
-                                    addStatement("return null")
-                                }
-                            }.build()
-                        )
+                                genLogExit()
+                                addStatement("return result")
+                                endControlFlow()
+                            } else {
+                                genLogExit()
+                                addStatement("return null")
+                            }
+                        }
                     }
                 }
                 editorFoldOf("choose index functions") {
                     for ((name, stat) in def.statementsMap) {
                         if (stat.contents.size > 1) {
-                            this@type.addFunction(
-                                FunSpec.builder(name.nameForChooseIndexFunction).apply {
-                                    addModifiers(KModifier.OPEN)
-                                    if (def.parentMap[name] != null && name !in noParentNodeNames) {
-                                        addParameter("context", ClassName(packageName, name.nameForParent))
-                                    }
-                                    returns(Int::class)
-                                    addStatement("return ${AbstractGenerator::random.name}.nextInt(${stat.contents.size})")
-                                }.build()
-                            )
+                            funcWithLog(name.nameForChooseIndexFunction) {
+                                addModifiers(KModifier.OPEN)
+                                if (def.parentMap[name] != null && name !in noParentNodeNames) {
+                                    addParameter("context", ClassName(packageName, name.nameForParent))
+                                }
+                                returns(Int::class)
+                                genLogExit()
+                                addStatement("return ${AbstractGenerator::random.name}.nextInt(${stat.contents.size})")
+                            }
                         }
                     }
                 }
@@ -370,28 +427,28 @@ class DefinitionProcessor(
                                     "$name${if (stat.contents.size > 1) i else ""}",
                                     ref.name
                                 )
-                                this@type.addFunction(
-                                    FunSpec.builder(funcName).apply {
-                                        addModifiers(KModifier.OPEN)
-                                        addParameter("parent", ClassName(packageName, name.nameForNode))
-                                        returns(Int::class)
-                                        addStatement(
-                                            "return %L",
-                                            when (refType) {
-                                                NULLABLE -> "random.nextInt(2)"
-                                                ONE_OR_MORE -> "random.nextInt(${AbstractGenerator::DEFAULT_MAX_SIZE.name}) + 1"
-                                                ZERO_OR_MORE -> "random.nextInt(-1, ${AbstractGenerator::DEFAULT_MAX_SIZE.name}) + 1"
-                                                else -> throw NoWhenBranchMatchedException()
-                                            }
-                                        )
-                                    }.build()
-                                )
+                                funcWithLog(funcName) {
+                                    addModifiers(KModifier.OPEN)
+                                    addParameter("parent", ClassName(packageName, name.nameForNode))
+                                    returns(Int::class)
+                                    genLogExit()
+                                    addStatement(
+                                        "return %L",
+                                        when (refType) {
+                                            NULLABLE -> "random.nextInt(2)"
+                                            ONE_OR_MORE -> "random.nextInt(${AbstractGenerator::DEFAULT_MAX_SIZE.name}) + 1"
+                                            ZERO_OR_MORE -> "random.nextInt(-1, ${AbstractGenerator::DEFAULT_MAX_SIZE.name}) + 1"
+                                            else -> throw NoWhenBranchMatchedException()
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
                 }
                 editorFoldOf("new node functions") {
                     for ((name, _) in def.statementsMap) {
+                        // no logging need for new node functions
                         this@type.addFunction(
                             FunSpec.builder(name.nameForNewNodeFunction).apply {
                                 addModifiers(KModifier.OPEN)
@@ -434,7 +491,7 @@ class DefinitionProcessor(
                             }
                         }
 
-                        val func = FunSpec.builder(name.nameForGenFunction).apply {
+                        funcWithLog(name.nameForGenFunction) {
                             addModifiers(KModifier.OPEN)
                             val hasParent = def.parentMap[name] != null
                             if (hasParent && name !in noParentNodeNames) {
@@ -449,6 +506,7 @@ class DefinitionProcessor(
                                 } else ""
                             )
                             beginControlFlow("if (chooseRef != null)")
+                            genLogExit()
                             addStatement("return chooseRef")
                             endControlFlow()
                             addStatement("val result = ${name.nameForNewNodeFunction}()")
@@ -481,9 +539,9 @@ class DefinitionProcessor(
                             } else if (stat.contents.size == 1) {
                                 writeGenChildrenCode(stat.contents.single())
                             }
+                            genLogExit()
                             addStatement("return result")
-                        }.build()
-                        this@type.addFunction(func)
+                        }
                     }
                 }
             }.build()
